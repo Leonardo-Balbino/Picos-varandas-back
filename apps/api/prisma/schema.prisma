@@ -1,0 +1,110 @@
+// Modelagem completa das entidades de negócio (vendas_pdv, extratos_bancarios,
+// conciliacoes, contas_pagar, contas_receber, movimentacoes_caixa,
+// fechamentos_mensais, taxas_gateway, etc.) é objeto do Card A2, ainda não
+// entregue neste repositório. O que existe aqui é só o subconjunto que os
+// Cards B1/B2 desta sessão exigem: usuarios, refresh_tokens e auditoria —
+// modelado agora, o resto fica para quando D/E/F/G/H chegarem (mesmo
+// princípio já usado em packages/contracts: não modelar contrato antes da
+// rota existir).
+//
+// Prisma 7, gerador `prisma-client` (sem engine Rust — seção 3.4): o Query
+// Compiler em TypeScript é o padrão na v7, com bundle muito menor e sem o
+// binário Rust que inflava cold start. `output` é obrigatório e aponta para
+// dentro de src/, porque o gerador emite TypeScript, não um pacote binário —
+// por isso `prisma generate` precisa rodar ANTES de `nest build`/`tsc`.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Perfis de acesso — seção 3.9 e Card B2. Só dois valores existem no
+// documento: admin (visão total) e operador (operação diária, sem
+// destravar período).
+enum PerfilUsuario {
+  admin
+  operador
+}
+
+// Campos conforme a entidade `usuarios` do Card A2 (seção A2). senha_hash é
+// nullable porque um usuário criado só via Google OAuth pode nunca ter
+// definido senha local (Card B1: login por Google não faz auto-cadastro,
+// mas nada impede que um admin cadastre alguém sem senha e essa pessoa só
+// entre por Google).
+model Usuario {
+  id           String        @id @default(uuid())
+  nome         String
+  email        String        @unique
+  senhaHash    String?       @map("senha_hash")
+  avatarUrl    String?       @map("avatar_url")
+  googleId     String?       @unique @map("google_id")
+  perfil       PerfilUsuario
+  ativo        Boolean       @default(true)
+  // Incrementar invalida todos os access tokens em circulação — é o que faz
+  // `ativo: false` surtir efeito imediato sem esperar os 15 min do JWT
+  // (Card B1/J1). Comparado no payload do access token a cada requisição.
+  tokenVersion Int           @default(0) @map("token_version")
+  criadoEm     DateTime      @default(now()) @map("criado_em")
+
+  refreshTokens RefreshToken[]
+  auditorias    Auditoria[]
+
+  @@map("usuarios")
+}
+
+// Não consta entre as entidades do Card A2 no documento — modelada aqui
+// porque o Card B1 exige refresh token opaco com rotação e família (seção
+// B1: "reuso de token já rotacionado revoga toda a família").
+//
+// familiaId é o identificador comum a toda a cadeia de rotações sucessivas:
+// login cria uma família nova; cada /auth/refresh emite um token com o
+// MESMO familiaId e marca o anterior revogado. Reuso de um token já
+// revogado da família aciona a revogação de todos os tokens ativos daquela
+// familiaId (ver AuthService.refresh).
+//
+// tokenHash, nunca o token em texto puro (seção B1: "persistido com hash no
+// banco"). Hash simples (SHA-256), não argon2: o valor já é aleatório de
+// alta entropia gerado pelo servidor, não uma senha escolhida por humano —
+// não há o que um algoritmo lento de senha protegeria aqui, e SHA-256
+// permite lookup por igualdade de hash em O(1) via índice único, o que
+// argon2 (salt aleatório por chamada) não permite.
+model RefreshToken {
+  id         String    @id @default(uuid())
+  usuarioId  String    @map("usuario_id")
+  familiaId  String    @map("familia_id")
+  tokenHash  String    @unique @map("token_hash")
+  expiraEm   DateTime  @map("expira_em")
+  revogadoEm DateTime? @map("revogado_em")
+  criadoEm   DateTime  @default(now()) @map("criado_em")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@index([familiaId])
+  @@index([usuarioId])
+  @@map("refresh_tokens")
+}
+
+// Campos conforme a entidade `auditoria` do Card A2 (seção A2), com o
+// índice obrigatório da mesma seção. usuarioId sem nullable: o
+// AuditoriaInterceptor (Card B2) só grava em mutações que passaram pelo
+// RolesGuard, ou seja, sempre há um usuário autenticado na requisição.
+model Auditoria {
+  id            String   @id @default(uuid())
+  usuarioId     String   @map("usuario_id")
+  acao          String
+  entidade      String
+  entidadeId    String   @map("entidade_id")
+  payloadAntes  Json?    @map("payload_antes")
+  payloadDepois Json?    @map("payload_depois")
+  ip            String?
+  criadoEm      DateTime @default(now()) @map("criado_em")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@index([entidade, entidadeId, criadoEm])
+  @@map("auditoria")
+}

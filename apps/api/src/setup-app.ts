@@ -1,0 +1,49 @@
+import type { INestApplication } from '@nestjs/common';
+import { ZodValidationPipe } from 'nestjs-zod';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+
+/**
+ * Configuração compartilhada entre o bootstrap real (main.ts) e qualquer app
+ * de teste que precise exercitar o mesmo pipeline (CORS, validação, filtro
+ * de exceções) — para as duas versões nunca poderem divergir.
+ */
+export function configureApp(app: INestApplication): void {
+  // Trust proxy (Sessão 2 — Railway): a aplicação roda atrás do proxy
+  // reverso do Railway, então sem isto `req.ip` traz o IP interno do
+  // proxy — igual para todo mundo — e o rate limit de login (Card B1,
+  // 5/min) passaria a valer para TODOS os usuários somados, não por
+  // usuário real. Com trust proxy habilitado, o Express lê o IP do
+  // cliente a partir de X-Forwarded-For, que é o que o
+  // ThrottlerGuard usa por padrão (req.ip). `1` confia em exatamente um
+  // salto de proxy — o do próprio Railway na frente da aplicação.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
+  // Base URL: /api/v1 (seção 3.9).
+  app.setGlobalPrefix('api/v1');
+
+  // CORS com origem explícita — nunca wildcard (Card A1). credentials:false
+  // porque a autenticação é via Authorization: Bearer, não cookie (Card B1).
+  const corsOrigin = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim());
+  app.enableCors({
+    origin: corsOrigin && corsOrigin.length > 0 ? corsOrigin : false,
+    credentials: false,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Idempotency-Key',
+      // Headers do agente local (Card I1) — sync/heartbeat.
+      'X-Agent-Id',
+      'X-Timestamp',
+      'X-Signature',
+    ],
+  });
+
+  // Validação — seção 3.10: fonte única em Zod via nestjs-zod. Cada
+  // endpoint declara seu DTO com createZodDto(schema) (schema vindo de
+  // packages/contracts); este pipe global só aplica o schema já anexado ao
+  // DTO. Não há mais class-validator/class-transformer no projeto.
+  app.useGlobalPipes(new ZodValidationPipe());
+
+  app.useGlobalFilters(new AllExceptionsFilter());
+}

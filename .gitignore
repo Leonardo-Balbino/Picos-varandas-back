@@ -1,0 +1,32 @@
+# Dependências
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+/out
+**/dist/
+
+# Ambiente local
+.env
+.env.*.local
+
+# Prisma
+apps/api/prisma/*.db
+# Client gerado pelo gerador `prisma-client` (Prisma 7, seção 3.4) — código
+# gerado, não fonte. Regenerado por `prisma generate` (roda antes do build).
+apps/api/src/generated/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / SO
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/

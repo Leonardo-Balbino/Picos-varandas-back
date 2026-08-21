@@ -1,0 +1,20 @@
+{
+  "name": "varanda",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Restaurante Varanda — Sistema de Conciliação Fiscal & Financeiro (monorepo)",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "dev:api": "pnpm --filter api start:dev",
+    "build:contracts": "pnpm --filter contracts build",
+    "build:api": "pnpm --filter contracts build && pnpm --filter api build",
+    "lint:api": "pnpm --filter api lint",
+    "prisma:api": "prisma --config apps/api/prisma.config.ts"
+  },
+  "devDependencies": {
+    "prisma": "7.9.1"
+  }
+}

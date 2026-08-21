@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    // false: isto é uma API executável (dist/main.js), não uma lib
+    // publicada — nada consome apps/api/dist/*.d.ts. Com nestjs-zod (Card
+    // B1), declaration: true faz o tsc falhar (TS2883) tentando nomear o
+    // tipo inferido de createZodDto(schema) num .d.ts — a classe retornada
+    // não é nomeável de forma portátil. packages/contracts, que É consumido
+    // por outro workspace, mantém declaration: true no próprio tsconfig.
+    "declaration": false,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "incremental": true,
+    // Dentro de dist/, não ao lado do tsconfig: deleteOutDir (nest-cli.json)
+    // apaga dist/ inteiro a cada build, então o cache incremental é limpo
+    // junto. Sem isto, um `rm -rf dist` manual deixa o tsc achar que nada
+    // mudou (o .tsbuildinfo sobrevive fora de dist/) e pular a emissão
+    // silenciosamente — build "passa", dist fica vazio.
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo",
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  // Sem isto, tsc inclui por padrão qualquer .ts na raiz de apps/api (ex.:
+  // prisma.config.ts, que é config do CLI do Prisma, não parte do app) e
+  // colide com rootDir: "./src".
+  "include": ["src/**/*"]
+}
