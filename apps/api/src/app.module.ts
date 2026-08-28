@@ -5,6 +5,7 @@ import { InfraModule } from './infra/infra.module';
 import { ArquivosModule } from './modules/arquivos/arquivos.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConciliacaoModule } from './modules/conciliacao/conciliacao.module';
+import { ConfiguracoesModule } from './modules/configuracoes/configuracoes.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { FechamentoModule } from './modules/fechamento/fechamento.module';
 import { FinanceiroModule } from './modules/financeiro/financeiro.module';
@@ -22,6 +23,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     UsuariosModule,
     DashboardModule,
     ConciliacaoModule,
+    ConfiguracoesModule,
     FinanceiroModule,
     FechamentoModule,
     SyncModule,

@@ -1,20 +1,16 @@
 import { z } from 'zod';
-import { requestSchema } from './common';
+import { formaPagamentoSchema, requestSchema } from './common';
 
 /**
  * Ingestão de vendas do PDV via agente local — Card I1. Autenticação por
  * HMAC-SHA256 (headers X-Agent-Id/X-Timestamp/X-Signature), não JWT — este
  * schema não tem relação com os schemas de auth.
+ *
+ * `formaPagamentoSchema` vem de common.ts (movido pra lá quando os módulos
+ * financeiro/conciliação/configurações também passaram a precisar dele) —
+ * já chega exportado pelo barrel (index.ts) via `export * from './common'`,
+ * não precisa ser reexportado aqui de novo.
  */
-
-export const formaPagamentoSchema = z.enum([
-  'dinheiro',
-  'pix',
-  'cartao_credito',
-  'cartao_debito',
-  'voucher',
-]);
-export type FormaPagamento = z.infer<typeof formaPagamentoSchema>;
 
 /** Aceita string OU number para campos monetários — o PDV legado emite
  * number (ver exemplo de payload do Card I1: `"valorBruto": 154.00`), mas

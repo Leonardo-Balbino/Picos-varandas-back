@@ -23,7 +23,11 @@ export type PaginationMeta = z.infer<typeof paginationMetaSchema>;
 
 export const paginationQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().positive().max(200).default(50),
+  // Teto elevado de 200 para 2000 (Card D2): telas que buscam "tudo de uma conta" de uma vez
+  // (conciliação, com extrato bancário real importado passando de mil linhas) precisam de mais
+  // que 200 para não truncar silenciosamente — nenhuma tela hoje faz paginação de UI de verdade,
+  // é sempre "busca tudo, filtra no cliente" (ver conciliacaoStore.ts do frontend).
+  pageSize: z.coerce.number().int().positive().max(2000).default(50),
 });
 export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 
@@ -91,3 +95,27 @@ export const competenciaSchema = z
   .string()
   .regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Competência deve estar no formato AAAA-MM.');
 export type Competencia = z.infer<typeof competenciaSchema>;
+
+// ---------------------------------------------------------------------------
+// Enums de domínio compartilhados entre mais de um arquivo de contrato
+// (financeiro, conciliação, configurações, dashboard). Espelham 1:1 os
+// enums do Prisma (Card A2) — minúsculo, de propósito: o schema.prisma é a
+// fonte da verdade, nada de traduzir para maiúsculo só para bater com um
+// mock antigo de frontend (mesmo princípio já aplicado a perfilUsuarioSchema
+// em auth.ts — o front reconcilia do lado dele).
+// ---------------------------------------------------------------------------
+
+export const formaPagamentoSchema = z.enum([
+  'dinheiro',
+  'pix',
+  'cartao_credito',
+  'cartao_debito',
+  'voucher',
+]);
+export type FormaPagamento = z.infer<typeof formaPagamentoSchema>;
+
+export const tipoTransacaoSchema = z.enum(['credito', 'debito']);
+export type TipoTransacao = z.infer<typeof tipoTransacaoSchema>;
+
+export const statusConciliacaoSchema = z.enum(['pendente', 'conciliado', 'divergente', 'ignorado']);
+export type StatusConciliacao = z.infer<typeof statusConciliacaoSchema>;

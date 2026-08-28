@@ -11,3 +11,8 @@ export * from './auth';
 export * from './sync';
 export * from './arquivos';
 export * from './conciliacao';
+export * from './usuarios';
+export * from './configuracoes';
+export * from './financeiro';
+export * from './fechamento';
+export * from './dashboard';
