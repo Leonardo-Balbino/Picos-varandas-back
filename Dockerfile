@@ -27,96 +27,69 @@ RUN pnpm --filter contracts build \
   && pnpm --filter api build \
   && pnpm deploy --filter api --prod --legacy /out
 
-# Poda de peso morto que `pnpm deploy --prod` não remove sozinho (Card A1,
-# meta de imagem abaixo de 200 MB). `@prisma/client` mantém uma peer
-# dependency opcional em `prisma` (o pacote CLI) mesmo em runtime; como
-# workspace inteiro tem `prisma` instalado (para `generate`/`migrate`),
-# pnpm linka o peer — e junto vem `prisma` inteiro: Prisma Studio
-# (@prisma/studio-core + React/Radix/@visx, ~120 MB), `@prisma/dev`
-# (banco local embutido, puxa `effect`, `@electric-sql/pglite`, `mysql2`,
-# `ajv`, `find-my-way`, os pacotes `@prisma/*-engine*` de introspecção) e o
-# binário Rust da schema engine (~22 MB).
+# Poda MÍNIMA de peso morto (não a poda agressiva de sessões anteriores —
+# ver decisão abaixo). `prisma` entra como dependência real de apps/api
+# (não só peer transitivo de @prisma/client) precisamente para que
+# `pnpm deploy --filter api --prod` o inclua com `.bin/prisma` linkado —
+# sem isso o binário nem existe na imagem (`Cannot find module
+# '.../node_modules/.bin/prisma'`).
 #
-# Sessão 3 (Railway): a linha "nunca pelo client em runtime" acima só era
-# verdade porque `migrate deploy` rodava fora do container (Cloud Run:
-# imagem some no cold start, então CLI *precisava* ficar de fora — imagem
-# menor = boot mais rápido). No Railway o container é fixo e o Pre-Deploy
-# Command roda comandos DENTRO dele — sem a CLI, `prisma migrate deploy`
-# não tem binário para executar e migração nenhuma sai do papel. A poda
-# abaixo foi reduzida para não apagar mais o pacote `prisma` em si, nem o
-# binário da schema engine, nem as duas dependências que a schema engine
-# usa para se localizar (`@prisma/fetch-engine`, e só a versão 7.9.1 de
-# `@prisma/get-platform` — a 7.2.0 é usada exclusivamente por `@prisma/dev`
-# e continua saindo) — confirmado com `pnpm why` que essas quatro entradas
-# (prisma, @prisma/engines, @prisma/fetch-engine, @prisma/get-platform@7.9.1)
-# são exatamente a árvore de dependência de `prisma migrate deploy`, nada
-# a mais. `typescript@6.0.3` também fica (é dependência declarada do
-# próprio `prisma`/`@prisma/client`, diferente do `typescript@5.9.3` do
-# `@nestjs/cli`, que segue de fora). Prisma Studio (@prisma/studio-core) e
-# o banco local embutido (@prisma/dev + effect + pglite) continuam podados
-# — nenhum dos dois entra no caminho de `migrate deploy`.
+# DECISÃO VALIDADA COM DOCKER REAL (antes só simulada fora de container,
+# nunca teve como confirmar): tentei podar Prisma Studio
+# (@prisma/studio-core, ~120 MB de React/Radix/@visx) e o banco local
+# embutido (@prisma/dev, puxa effect/fast-check/pglite/remeda/valibot) como
+# sessões anteriores pretendiam. Não dá. `prisma/build/cli.js` importa os
+# dois **incondicionalmente no topo do arquivo**, antes de despachar para
+# qualquer subcomando — não é lazy "só dentro de `studio`/`dev`" como o
+# comentário antigo desta seção supunha (nunca tinha sido testado com
+# Docker de verdade). Puro `node .../cli.js --version` já quebra com
+# `Cannot find module '@prisma/studio-core/...'` ou
+# `'@prisma/dev/internal/state'` se qualquer um dos dois estiver ausente —
+# e cada um deles carrega sua própria árvore pesada (effect precisa de
+# fast-check e jiti; @prisma/config, usado por QUALQUER comando pra ler
+# prisma.config.ts, também importa effect diretamente). Não existe
+# meio-termo: ou a árvore inteira de Studio+Dev fica (imagem ~390 MB, CLI
+# funcional) ou ela sai inteira (imagem ~100 MB, mas nenhum comando do
+# `prisma` roda — nem `--version`, nem `migrate deploy`, nem `--help`).
 #
-# Ressalva importante: `pnpm why` prova a árvore de dependências declarada,
-# não prova o que o bundle minificado da CLI (`build/cli.js`) de fato
-# executa no boot — encontrei `require("@prisma/studio-core/...")` dentro
-# dele, então a poda do Studio (mantida abaixo) descansa na suposição de
-# que esse require é lazy (só roda dentro do comando `studio`, nunca em
-# `migrate deploy`). Sem Docker disponível no ambiente em que isso foi
-# escrito, essa suposição NÃO foi validada com um `docker run` real. Antes
-# de apontar o Pre-Deploy Command do Railway para `prisma migrate deploy`
-# de verdade, rodar `docker build` + `docker run <imagem> node
-# node_modules/.bin/prisma migrate deploy --help` (sem banco real,
-# só para confirmar que a CLI sobe sem estourar `MODULE_NOT_FOUND`) — a
-# mesma disciplina de "build passa, run é que prova" já documentada abaixo.
+# Escolhido: manter o CLI funcional (imagem maior) para que o Pre-Deploy
+# Command do Railway rode `prisma migrate deploy` dentro do próprio
+# container, sem depender de uma máquina local com DATABASE_PUBLIC_URL.
+# Isso substitui a prática anterior documentada ("migrations aplicadas da
+# máquina local") — atualizar o Pre-Deploy Command do serviço no Railway
+# para `./node_modules/.bin/prisma migrate deploy --config
+# apps/api/prisma.config.ts` ao adotar esta imagem.
 #
-# A lista abaixo (Sessão 2, Card B1) foi ampliada depois do primeiro
-# `docker build` REAL desta imagem — as sessões anteriores nunca tinham
-# rodado Docker de verdade (só simulado fora de container), e o build real
-# saiu em 433 MB, mais que o dobro da meta. Cada entrada nova foi
-# confirmada com `pnpm why <pacote>` mostrando que a ÚNICA rota até ela é
-# `@prisma/studio-core`/`@prisma/dev`/`@nestjs/cli` (build-time) — nada
-# alcançável por `dist/main.js`. `iconv-lite` e `ajv@6` em particular só
-# existem via `@nestjs/cli` (devDependency, ferramenta de build, nunca
-# roda em runtime). Nada disso é alcançável pelo código da aplicação —
-# medido e validado rodando a imagem podada de ponta a ponta (boot,
-# health checks, login, refresh) antes de considerar resolvido.
+# Só podamos o que ficou provado, com `docker run` real (não só `pnpm why`
+# — ver acima o motivo de isso não bastar), como inalcançável por
+# `prisma migrate deploy`/`--version`/`--help`:
+#   - @prisma/get-platform@7.2.0 (só a 7.9.1, usada de fato, fica)
+#   - typescript@5.9.3 (só do @nestjs/cli, devDependency de build)
+#   - mysql2, ajv, find-my-way (introspecção MySQL / servidor HTTP do
+#     Studio — não exercitados por migrate/version/help mesmo com Studio
+#     presente; entrypoints internos deles não são tocados fora do
+#     subcomando `studio`, diferente do require de topo de cli.js)
+#   - @types/lodash (tipos, nunca runtime)
+# Cada um confirmado individualmente rodando `migrate deploy --help` e
+# `--version` depois de removido, não só `pnpm why` — a mesma lição do
+# achado abaixo sobre `iconv-lite`.
 #
-# Armadilha real encontrada aqui: a primeira versão desta lista incluía
-# `iconv-lite@*`, com base num `pnpm why iconv-lite` cuja saída eu truncei
-# (`| head -8`) e só vi o primeiro ramo (@nestjs/cli, devDependency). Um
-# segundo ramo — body-parser → express → @nestjs/platform-express — não
-# apareceu no que eu li, e como só existe UMA versão de iconv-lite no
-# lockfile, apagá-la quebrou o driver HTTP em runtime (`docker run` falhou
-# com "No driver (HTTP) has been selected"). `docker build` passou normal;
-# só o `docker run` expôs o problema — exatamente o motivo de validar as
-# duas etapas, não só a primeira. Todo nome nesta lista foi reverificado com
-# `pnpm why <pacote>` SEM truncar a saída, conferindo que toda raiz passa só
-# por @prisma+studio-core/@prisma+dev/@nestjs+cli.
+# Armadilha real encontrada numa sessão anterior (mantida como registro):
+# a primeira versão desta lista incluía `iconv-lite@*`, com base num
+# `pnpm why iconv-lite` truncado (`| head -8`) que só mostrou o ramo
+# @nestjs/cli (devDependency). Um segundo ramo — body-parser → express →
+# @nestjs/platform-express — não apareceu, e como só existe UMA versão de
+# iconv-lite no lockfile, apagá-la quebrou o driver HTTP em runtime
+# (`docker run` falhou com "No driver (HTTP) has been selected"). `docker
+# build` passou normal; só o `docker run` expôs o problema — por isso toda
+# entrada desta lista, incluindo as atuais, precisa ser validada rodando a
+# imagem, não só inspecionando a árvore de dependências declarada.
 RUN find /out/node_modules/.pnpm -maxdepth 1 \( \
-      -name "@prisma+studio-core@*" -o \
-      -name "@prisma+dev@*" -o \
-      -name "@prisma+query-plan-executor@*" -o \
-      -name "@prisma+streams-local@*" -o \
       -name "@prisma+get-platform@7.2.0*" -o \
-      -name "effect@*" -o \
-      -name "@electric-sql+pglite@*" -o \
-      -name "@electric-sql+pglite-tools@*" -o \
-      -name "@radix-ui+*" -o \
-      -name "@visx+*" -o \
-      -name "react@*" -o \
-      -name "react-dom@*" -o \
-      -name "elkjs@*" -o \
-      -name "remeda@*" -o \
-      -name "fast-check@*" -o \
-      -name "valibot@*" -o \
-      -name "jiti@*" -o \
       -name "typescript@5.9.3*" -o \
       -name "mysql2@*" -o \
       -name "ajv@*" -o \
       -name "find-my-way@*" -o \
-      -name "csstype@*" -o \
-      -name "d3-geo@*" -o \
-      -name "d3-shape@*" -o \
       -name "@types+lodash@*" \
     \) -exec rm -rf {} + \
   && find /out/node_modules/.pnpm/@prisma+client@*/node_modules/@prisma/client/runtime \
@@ -133,6 +106,15 @@ RUN addgroup -S app && adduser -S app -G app
 COPY --from=builder --chown=app:app /out ./
 COPY --from=builder --chown=app:app /app/apps/api/dist ./dist
 COPY --from=builder --chown=app:app /app/apps/api/prisma ./prisma
+# prisma.config.ts, não só a pasta prisma/: é onde datasource.url vem de
+# DIRECT_URL/DATABASE_URL (Prisma 7 — schema.prisma não declara url própria,
+# ver prisma.config.ts). Faltando, `prisma migrate deploy` dentro do
+# container falha com "Config file not found" antes de sequer tentar
+# conectar — achado rodando o Pre-Deploy Command real via `docker run`, não
+# só o `nest build`/`docker build` passando. Carregado em runtime via
+# `jiti` (mantido na poda acima), não precisa de um passo de compilação
+# separado.
+COPY --from=builder --chown=app:app /app/apps/api/prisma.config.ts ./prisma.config.ts
 USER app
 EXPOSE 8080
 CMD ["node", "dist/main.js"]
