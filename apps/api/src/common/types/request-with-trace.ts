@@ -11,4 +11,12 @@ import type { Request } from 'express';
  */
 export interface RequestWithTraceId extends Request {
   traceId: string;
+  // Populado pelo `verify` do body-parser em main.ts (bodyParser: false +
+  // json({ verify })) — o HmacAuthGuard (Card I1) precisa do corpo BRUTO,
+  // antes do parse JSON, para recalcular a assinatura HMAC do agente
+  // exatamente como o agente a calculou. Ausente em rotas sem corpo (GET) e,
+  // por construção do `verify`, sempre presente em rotas com corpo JSON —
+  // opcional só porque o tipo não consegue expressar "presente quando
+  // Content-Type é application/json".
+  rawBody?: Buffer;
 }

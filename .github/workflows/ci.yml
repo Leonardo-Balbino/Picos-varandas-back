@@ -1,0 +1,58 @@
+name: CI
+
+# Card A3. Só valida (install + gera o client Prisma + lint + build + test);
+# NÃO faz deploy nem roda migração. O deploy é o GitHub-integration nativo
+# do Railway (push em main → build da imagem pelo próprio Dockerfile →
+# nova revisão) — duplicar isso aqui adicionaria um segundo caminho de
+# deploy sem necessidade. A migração de banco roda como Pre-Deploy Command
+# do serviço Railway (dentro do container, usando a CLI do Prisma que o
+# Dockerfile preserva no runtime — ver Dockerfile), não neste workflow: não
+# expomos DATABASE_URL/DIRECT_URL de produção como secret do GitHub para
+# isto, e "migração roda de um lugar só, serializada" (seção do Card A3)
+# já é garantido pelo Pre-Deploy Command rodar dentro do próprio deploy.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - name: Instalar dependências
+        run: pnpm install --frozen-lockfile
+
+      - name: Gerar client do Prisma
+        # Necessário antes do build (seção 3.4: o gerador da v7 emite
+        # TypeScript dentro de src/generated, o tsc precisa encontrá-lo já
+        # no lugar) e antes do lint (import do client resolvendo de
+        # verdade, não só de tipos declarados à mão). Não precisa de
+        # DATABASE_URL/DIRECT_URL reais — prisma.config.ts usa
+        # process.env.DIRECT_URL direto (não o helper env()) exatamente
+        # para generate funcionar sem segredo configurado.
+        run: pnpm prisma:api generate
+
+      - name: Lint
+        run: pnpm lint:api
+
+      - name: Build
+        run: pnpm build:api
+
+      - name: Testes
+        # --passWithNoTests: rede de segurança para um módulo futuro que
+        # ainda não ganhou spec nenhum não derrubar o CI inteiro — não
+        # substitui a expectativa (seção "Testes" do plano de execução) de
+        # que cada card crítico (validação decimal, guards, motor de match)
+        # chegue com teste unitário próprio.
+        run: pnpm --filter api test -- --passWithNoTests

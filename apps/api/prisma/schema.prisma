@@ -36,22 +36,40 @@ enum PerfilUsuario {
 // mas nada impede que um admin cadastre alguém sem senha e essa pessoa só
 // entre por Google).
 model Usuario {
-  id           String        @id @default(uuid())
-  nome         String
-  email        String        @unique
-  senhaHash    String?       @map("senha_hash")
-  avatarUrl    String?       @map("avatar_url")
-  googleId     String?       @unique @map("google_id")
-  perfil       PerfilUsuario
-  ativo        Boolean       @default(true)
+  id                 String        @id @default(uuid())
+  nome               String
+  email              String        @unique
+  senhaHash          String?       @map("senha_hash")
+  avatarUrl          String?       @map("avatar_url")
+  googleId           String?       @unique @map("google_id")
+  perfil             PerfilUsuario
+  ativo              Boolean       @default(true)
   // Incrementar invalida todos os access tokens em circulação — é o que faz
   // `ativo: false` surtir efeito imediato sem esperar os 15 min do JWT
   // (Card B1/J1). Comparado no payload do access token a cada requisição.
-  tokenVersion Int           @default(0) @map("token_version")
-  criadoEm     DateTime      @default(now()) @map("criado_em")
+  tokenVersion       Int           @default(0) @map("token_version")
+  // Reversão consciente de uma decisão anterior de não modelar este campo
+  // (ver prisma/seed-admins-iniciais.ts, comentário original). Sinaliza que
+  // o usuário entrou com senha temporária/compartilhada (seed inicial ou
+  // POST /usuarios/:id/resetar-senha do Card J1) e precisa trocá-la no
+  // próximo login antes de usar o resto do sistema. Exposto na resposta de
+  // /auth/login e /auth/me (tokenParSchema/meResponseSchema em
+  // packages/contracts), não em usuarioPublicoSchema genérico — é um sinal
+  // operacional de sessão, não um dado de perfil.
+  precisaTrocarSenha Boolean       @default(false) @map("precisa_trocar_senha")
+  criadoEm           DateTime      @default(now()) @map("criado_em")
 
   refreshTokens RefreshToken[]
   auditorias    Auditoria[]
+
+  // Relações de negócio (Card A2) — autoria/vínculo em módulos financeiros e
+  // de conciliação. Todas opcionais do ponto de vista do model Usuario (um
+  // usuário pode nunca ter criado nada em algum desses módulos).
+  arquivosEnviados     Arquivo[]           @relation("ArquivoUsuario")
+  conciliacoesFeitas   Conciliacao[]       @relation("ConciliacaoUsuario")
+  contasPagarCriadas   ContaPagar[]        @relation("ContaPagarCriadoPor")
+  movimentacoesCaixa   MovimentacaoCaixa[] @relation("MovimentacaoCaixaUsuario")
+  fechamentosTrancados FechamentoMensal[]  @relation("FechamentoMensalTrancadoPor")
 
   @@map("usuarios")
 }
@@ -107,4 +125,408 @@ model Auditoria {
 
   @@index([entidade, entidadeId, criadoEm])
   @@map("auditoria")
+}
+
+// =============================================================================
+// Domínio de negócio (Card A2) — conciliação, financeiro, cofre, fechamento,
+// sync do agente e storage. Modelado de uma vez só (não incremental por
+// card), porque há FKs cruzadas entre D/E/F/G/H/I/J que uma modelagem
+// gradual forçaria a resolver com ALTER TABLE sucessivos sem necessidade —
+// ver justificativa completa no plano de implementação da sessão.
+//
+// Convenção monetária (seção 3.2, replicada de common/money.ts): todo campo
+// de dinheiro é Decimal @db.Decimal(14,2), nunca Float. Percentuais de taxa
+// também são Decimal (não são "dinheiro", mas seguem a mesma filosofia de
+// nunca usar ponto flutuante para valor que entra em conta exata).
+//
+// Convenção temporal (seção 3.3): instantes (têm hora, não só dia) são
+// DateTime @db.Timestamptz(3), sempre gravados em UTC pelo container.
+// Datas civis (vencimento, competência, referência) são DateTime @db.Date,
+// sem componente de hora/fuso. NOTA: usuarios/refresh_tokens/auditoria
+// (Cards B1/B2, já em produção) usam TIMESTAMP sem fuso — desvio anterior a
+// esta sessão, não corrigido aqui para não arriscar uma migração em tabelas
+// de auth já com dado real; todo campo NOVO abaixo segue a regra correta.
+//
+// Storage (decisão desta sessão — ver seção 2 do plano): Cloudflare R2 da
+// spec original foi substituído por volume persistente do próprio Railway.
+// `arquivos.chaveArquivo` continua sendo o caminho relativo dentro do
+// storage (convenção <contexto>/<ano>/<mes>/<arquivoId>-<slug>, seção do
+// Card A4), só que hoje esse caminho é relativo a STORAGE_DIR no volume
+// montado, não uma chave de bucket S3.
+// =============================================================================
+
+enum FormaPagamento {
+  dinheiro
+  pix
+  cartao_credito
+  cartao_debito
+  voucher
+}
+
+enum TipoTransacao {
+  credito
+  debito
+}
+
+enum StatusConciliacao {
+  pendente
+  conciliado
+  divergente
+  ignorado
+}
+
+enum TipoConciliacao {
+  automatica
+  manual
+}
+
+enum StatusContaPagar {
+  pendente
+  pago
+  cancelado
+}
+
+enum StatusReceber {
+  pendente
+  recebido
+  divergente
+}
+
+enum TipoMovCaixa {
+  suprimento
+  sangria
+  despesa_caixa
+}
+
+enum OrigemRecurso {
+  conta_bancaria
+  caixa_local
+}
+
+enum StatusSync {
+  sucesso
+  erro
+  parcial
+}
+
+enum ContextoArquivo {
+  extrato
+  comprovante
+  backup
+}
+
+// pendente: registro criado ao emitir a intenção de upload (Card A4/I4),
+// antes do conteúdo estar de fato gravado e íntegro no volume. confirmado:
+// upload concluído e (no caso de I4) checksum conferido. Um `arquivo`
+// pendente há muito tempo é o que o job de manutenção (Card A5) limpa.
+enum StatusArquivo {
+  pendente
+  confirmado
+}
+
+// Vendas do PDV local (Dontec), recebidas via sync do agente (Card I1).
+// Nunca criada/alterada por usuário humano diretamente — só o endpoint de
+// sync escreve aqui (upsert por idExternoPdv).
+model VendaPdv {
+  id                String            @id @default(uuid())
+  idExternoPdv      String            @unique @map("id_externo_pdv")
+  numeroCupom       String            @map("numero_cupom")
+  dataHora          DateTime          @map("data_hora") @db.Timestamptz(3)
+  valorBruto        Decimal           @map("valor_bruto") @db.Decimal(14, 2)
+  valorDesconto     Decimal           @default(0) @map("valor_desconto") @db.Decimal(14, 2)
+  valorLiquido      Decimal           @map("valor_liquido") @db.Decimal(14, 2)
+  formaPagamento    FormaPagamento    @map("forma_pagamento")
+  bandeira          String?
+  statusConciliacao StatusConciliacao @default(pendente) @map("status_conciliacao")
+  // Campos brutos do PDV que não têm coluna própria — preserva o payload
+  // original recebido do agente para diagnóstico, sem forçar uma migração
+  // toda vez que o Dontec expõe um campo novo.
+  metadata          Json?
+  sincronizadoEm    DateTime          @default(now()) @map("sincronizado_em") @db.Timestamptz(3)
+
+  conciliacaoItens   ConciliacaoItemVenda[]
+  movimentacoesCaixa MovimentacaoCaixa[]
+
+  @@index([dataHora, statusConciliacao])
+  @@map("vendas_pdv")
+}
+
+// Lançamentos de extrato bancário/adquirente, importados via parser
+// (Card D1). hash_duplicidade é a garantia de idempotência ao reprocessar o
+// mesmo arquivo.
+model ExtratoBancario {
+  id                String            @id @default(uuid())
+  banco             String
+  conta             String
+  dataTransacao     DateTime          @map("data_transacao") @db.Date
+  descricaoOrigem   String            @map("descricao_origem")
+  documento         String?
+  tipoTransacao     TipoTransacao     @map("tipo_transacao")
+  valor             Decimal           @db.Decimal(14, 2)
+  categoria         String?
+  statusConciliacao StatusConciliacao @default(pendente) @map("status_conciliacao")
+  // Preenchido pelo PATCH .../extratos/:id/ignorar (Card D2) — obrigatório
+  // na aplicação (mínimo 10 caracteres), livre no banco.
+  motivoIgnorado    String?           @map("motivo_ignorado")
+  hashDuplicidade   String            @unique @map("hash_duplicidade")
+  arquivoId         String            @map("arquivo_id")
+  criadoEm          DateTime          @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  arquivo          Arquivo              @relation(fields: [arquivoId], references: [id])
+  conciliacaoLinks ConciliacaoExtrato[]
+
+  @@index([dataTransacao, statusConciliacao])
+  @@index([arquivoId])
+  @@map("extratos_bancarios")
+}
+
+// Registro de todo arquivo que vive no storage (Card A4) — extratos
+// importados, comprovantes de pagamento/movimentação, dumps de backup do
+// PDV legado (Card I4). usuarioId é nullable porque o agente (autenticado
+// por HMAC, sem usuário humano) também cria registros aqui (backups).
+model Arquivo {
+  id           String          @id @default(uuid())
+  chaveArquivo String          @unique @map("chave_arquivo")
+  nomeOriginal String          @map("nome_original")
+  mimeType     String          @map("mime_type")
+  tamanhoBytes Int             @map("tamanho_bytes")
+  contexto     ContextoArquivo
+  status       StatusArquivo   @default(pendente)
+  usuarioId    String?         @map("usuario_id")
+  criadoEm     DateTime        @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  usuario        Usuario?          @relation("ArquivoUsuario", fields: [usuarioId], references: [id])
+  extratos       ExtratoBancario[]
+  backupPdvLocal BackupPdvLocal?
+
+  @@index([usuarioId])
+  @@map("arquivos")
+}
+
+// Registro imutável de uma conciliação confirmada (Card D3/D4) — sem
+// endpoint de update, só criação e "desfazer" (que grava reversão na
+// auditoria, não edita esta linha).
+model Conciliacao {
+  id               String          @id @default(uuid())
+  dataConciliacao  DateTime        @map("data_conciliacao") @db.Date
+  valorExtrato     Decimal         @map("valor_extrato") @db.Decimal(14, 2)
+  valorPdv         Decimal         @map("valor_pdv") @db.Decimal(14, 2)
+  valorTaxaGateway Decimal         @default(0) @map("valor_taxa_gateway") @db.Decimal(14, 2)
+  diferencaAjuste  Decimal         @default(0) @map("diferenca_ajuste") @db.Decimal(14, 2)
+  tipoConciliacao  TipoConciliacao @map("tipo_conciliacao")
+  usuarioId        String          @map("usuario_id")
+  observacao       String?
+  criadoEm         DateTime        @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  usuario       Usuario                @relation("ConciliacaoUsuario", fields: [usuarioId], references: [id])
+  extratos      ConciliacaoExtrato[]
+  itensVenda    ConciliacaoItemVenda[]
+  contasReceber ContaReceber[]
+
+  @@map("conciliacoes")
+}
+
+// N:N — um crédito de conciliação pode cobrir vários lançamentos de extrato
+// (lote de cartão, Card D4/Regra 2).
+model ConciliacaoExtrato {
+  conciliacaoId String @map("conciliacao_id")
+  extratoId     String @map("extrato_id")
+
+  conciliacao Conciliacao     @relation(fields: [conciliacaoId], references: [id])
+  extrato     ExtratoBancario @relation(fields: [extratoId], references: [id])
+
+  @@id([conciliacaoId, extratoId])
+  @@index([extratoId])
+  @@map("conciliacao_extratos")
+}
+
+// N:N — vários cupons de venda do PDV podem compor um único crédito
+// conciliado.
+model ConciliacaoItemVenda {
+  conciliacaoId String @map("conciliacao_id")
+  vendaPdvId    String @map("venda_pdv_id")
+
+  conciliacao Conciliacao @relation(fields: [conciliacaoId], references: [id])
+  vendaPdv    VendaPdv    @relation(fields: [vendaPdvId], references: [id])
+
+  @@id([conciliacaoId, vendaPdvId])
+  @@index([vendaPdvId])
+  @@map("conciliacao_itens_venda")
+}
+
+// Contas a pagar (Card E1/E2). formaPagamento/origemRecurso/dataPagamento
+// só são preenchidos na baixa (PATCH .../pagar) — nulos enquanto pendente.
+// `situacao` (em_dia/vencido/vence_hoje/...) é derivada na leitura, nunca
+// persistida (seção do Card E1) — por isso não há coluna para ela aqui.
+model ContaPagar {
+  id                   String           @id @default(uuid())
+  codigo               String           @unique
+  fornecedor           String
+  categoria            String
+  valor                Decimal          @db.Decimal(14, 2)
+  dataVencimento       DateTime         @map("data_vencimento") @db.Date
+  dataPagamento        DateTime?        @map("data_pagamento") @db.Date
+  formaPagamento       FormaPagamento?  @map("forma_pagamento")
+  origemRecurso        OrigemRecurso?   @map("origem_recurso")
+  comprovanteArquivoId String?          @map("comprovante_arquivo_id")
+  status               StatusContaPagar @default(pendente)
+  observacao           String?
+  criadoPorId          String           @map("criado_por_id")
+  criadoEm             DateTime         @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  criadoPor          Usuario             @relation("ContaPagarCriadoPor", fields: [criadoPorId], references: [id])
+  movimentacoesCaixa MovimentacaoCaixa[]
+
+  @@index([status, dataVencimento])
+  @@map("contas_pagar")
+}
+
+// Contas a receber / previsões de recebíveis (Card F1). conciliacaoId é
+// preenchido quando um crédito bancário é vinculado à previsão (vira
+// `recebido`); a taxa efetiva é calculada por diferença nesse momento.
+model ContaReceber {
+  id                   String         @id @default(uuid())
+  codigo               String         @unique
+  origemDescricao      String         @map("origem_descricao")
+  meioPagamento        FormaPagamento @map("meio_pagamento")
+  valorBruto           Decimal        @map("valor_bruto") @db.Decimal(14, 2)
+  valorTaxaEstimada    Decimal        @map("valor_taxa_estimada") @db.Decimal(14, 2)
+  valorLiquidoPrevisto Decimal        @map("valor_liquido_previsto") @db.Decimal(14, 2)
+  dataPrevisao         DateTime       @map("data_previsao") @db.Date
+  dataRecebimento      DateTime?      @map("data_recebimento") @db.Date
+  conciliacaoId        String?        @map("conciliacao_id")
+  status               StatusReceber  @default(pendente)
+
+  conciliacao Conciliacao? @relation(fields: [conciliacaoId], references: [id])
+
+  @@index([dataPrevisao, status])
+  @@index([conciliacaoId])
+  @@map("contas_receber")
+}
+
+// Caixa físico/cofre (Card G1). contaPagarId liga a despesa em espécie ao
+// título de contas a pagar que a originou (PATCH .../pagar com
+// origemRecurso=caixa_local, Card E2).
+model MovimentacaoCaixa {
+  id                   String       @id @default(uuid())
+  dataHora             DateTime     @map("data_hora") @db.Timestamptz(3)
+  tipo                 TipoMovCaixa
+  valor                Decimal      @db.Decimal(14, 2)
+  descricao            String
+  categoria            String?
+  // Campo livre de texto (seção do Card G1): nem todo responsável pela
+  // retirada tem login no sistema.
+  responsavel          String
+  comprovanteArquivoId String?      @map("comprovante_arquivo_id")
+  usuarioId            String       @map("usuario_id")
+  contaPagarId         String?      @map("conta_pagar_id")
+  vendaPdvId           String?      @map("venda_pdv_id")
+
+  usuario    Usuario     @relation("MovimentacaoCaixaUsuario", fields: [usuarioId], references: [id])
+  contaPagar ContaPagar? @relation(fields: [contaPagarId], references: [id])
+  vendaPdv   VendaPdv?   @relation(fields: [vendaPdvId], references: [id])
+
+  @@index([dataHora])
+  @@index([contaPagarId])
+  @@map("movimentacoes_caixa")
+}
+
+// Fechamento mensal (Card H1/H2). Mês trancado materializa os totais aqui —
+// leitura de mês trancado nunca recalcula a partir dos lançamentos
+// subjacentes (seção do Card H1: "o valor consolidado de um mês fechado não
+// pode mudar retroativamente por qualquer motivo").
+model FechamentoMensal {
+  id                    String    @id @default(uuid())
+  ano                   Int
+  mes                   Int
+  faturamentoTotal      Decimal   @default(0) @map("faturamento_total") @db.Decimal(14, 2)
+  despesasTotal         Decimal   @default(0) @map("despesas_total") @db.Decimal(14, 2)
+  saldoFinal            Decimal   @default(0) @map("saldo_final") @db.Decimal(14, 2)
+  trancado              Boolean   @default(false)
+  trancadoPorId         String?   @map("trancado_por_id")
+  trancadoEm            DateTime? @map("trancado_em") @db.Timestamptz(3)
+  justificativaDestrave String?   @map("justificativa_destrave")
+
+  trancadoPor Usuario? @relation("FechamentoMensalTrancadoPor", fields: [trancadoPorId], references: [id])
+
+  @@unique([ano, mes])
+  @@map("fechamentos_mensais")
+}
+
+// Taxas contratadas por meio/bandeira (Card J1), com vigência — nunca
+// sobrescrita, sempre uma nova linha com vigenciaInicio nova e a anterior
+// com vigenciaFim preenchida. Alimenta o motor de match (Card D4, janela
+// D+N por bandeira) e o cálculo de previsão de recebíveis (Card F1).
+model TaxaGateway {
+  id                    String         @id @default(uuid())
+  meioPagamento         FormaPagamento @map("meio_pagamento")
+  bandeira              String?
+  percentual            Decimal        @db.Decimal(5, 2)
+  diasLiquidacao        Int            @map("dias_liquidacao")
+  antecipacaoAutomatica Boolean        @default(false) @map("antecipacao_automatica")
+  vigenciaInicio        DateTime       @map("vigencia_inicio") @db.Date
+  vigenciaFim           DateTime?      @map("vigencia_fim") @db.Date
+
+  @@index([meioPagamento, bandeira, vigenciaInicio])
+  @@map("taxas_gateway")
+}
+
+// Categorias financeiras (Card J1) usadas como allowlist de sugestão nos
+// campos livres `contas_pagar.categoria` / `movimentacoes_caixa.categoria`
+// — não é FK obrigatória (o documento não define as duas colunas acima como
+// referência estrita), só a lista administrável pela tela de configurações.
+model Categoria {
+  id    String  @id @default(uuid())
+  nome  String  @unique
+  ativa Boolean @default(true)
+
+  @@map("categorias")
+}
+
+// Log por parte recebida de um lote de sync do agente (Card I1).
+model AgenteSyncLog {
+  id                   String     @id @default(uuid())
+  loteId               String     @map("lote_id")
+  tipoEvento           String     @map("tipo_evento")
+  registrosRecebidos   Int        @default(0) @map("registros_recebidos")
+  registrosCriados     Int        @default(0) @map("registros_criados")
+  registrosAtualizados Int        @default(0) @map("registros_atualizados")
+  status               StatusSync
+  erroDetalhe          String?    @map("erro_detalhe")
+  criadoEm             DateTime   @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  @@index([loteId])
+  @@map("agente_sync_logs")
+}
+
+// Heartbeat do agente local (Card I2) — 4x/dia. Status "online/atenção/
+// offline" é calculado na LEITURA a partir do registro mais recente
+// (comparando criadoEm com agora), nunca persistido nem por job agendado.
+model AgenteHeartbeat {
+  id           String   @id @default(uuid())
+  criadoEm     DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+  versaoAgente String   @map("versao_agente")
+  metricas     Json?
+
+  @@index([criadoEm])
+  @@map("agente_heartbeats")
+}
+
+// Dumps do banco legado do PDV (Dontec) enviados pelo agente (Card I4) —
+// existe para eliminar o servidor do restaurante como ponto único de falha.
+// checksumSha256 é conferido pelo servidor (baixando o objeto do storage e
+// recalculando) antes deste registro ser considerado confirmado — ver
+// StatusArquivo no model Arquivo relacionado.
+model BackupPdvLocal {
+  id                String   @id @default(uuid())
+  arquivoId         String   @unique @map("arquivo_id")
+  dataReferencia    DateTime @map("data_referencia") @db.Date
+  tamanhoBytes      Int      @map("tamanho_bytes")
+  checksumSha256    String   @map("checksum_sha256")
+  versaoBancoOrigem String?  @map("versao_banco_origem")
+  criadoEm          DateTime @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  arquivo Arquivo @relation(fields: [arquivoId], references: [id])
+
+  @@map("backups_pdv_local")
 }

@@ -34,11 +34,19 @@ async function main(): Promise<void> {
 
   const usuario = await prisma.usuario.upsert({
     where: { email },
-    create: { nome, email, senhaHash, perfil: 'admin', ativo: true },
+    create: { nome, email, senhaHash, perfil: 'admin', ativo: true, precisaTrocarSenha: true },
     // token_version incrementa no update para invalidar qualquer sessão
     // antiga caso o seed esteja sendo usado para resetar a senha de um
     // admin comprometido — mesmo mecanismo de inativação do Card J1.
-    update: { senhaHash, ativo: true, tokenVersion: { increment: 1 } },
+    // precisaTrocarSenha volta a true: toda vez que este script define uma
+    // senha (criação ou reset), a senha é conhecida por quem rodou o
+    // script, não só pelo dono da conta — força troca no próximo login.
+    update: {
+      senhaHash,
+      ativo: true,
+      tokenVersion: { increment: 1 },
+      precisaTrocarSenha: true,
+    },
   });
 
   console.log(`Usuário admin pronto: ${usuario.email} (id: ${usuario.id}).`);

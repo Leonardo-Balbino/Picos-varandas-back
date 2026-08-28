@@ -1,0 +1,93 @@
+# Ambiente local de desenvolvimento — Postgres + API, para testar o
+# frontend (Picos-Varandas-front) contra um backend real, sem depender do
+# Railway. NÃO é o Dockerfile de produção (esse continua sendo a raiz,
+# usado pelo Railway) — este compose só orquestra localmente.
+#
+# Uso:
+#   docker compose up -d postgres          # sobe só o banco, aguarda ficar saudável
+#   docker compose run --rm migrate        # aplica as migrações (uma vez, ou após puxar novas)
+#   docker compose up -d api               # sobe a API
+#   docker compose logs -f api             # acompanhar
+#
+# Depois, a API responde em http://localhost:8080 — é exatamente o valor
+# default comentado em Picos-Varandas-front/.env.example
+# (VITE_API_BASE_URL=http://localhost:8080).
+#
+# Segredos abaixo (JWT_SECRET, AGENT_HMAC_SECRET, senha do Postgres) são
+# valores fixos SÓ para desenvolvimento local — nunca usados em produção
+# (Railway usa os segredos reais, gerados à parte). Não versionar um
+# arquivo .env com valor de produção apontando para este compose.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: varanda
+      POSTGRES_PASSWORD: varanda_dev_local
+      POSTGRES_DB: varanda
+    ports:
+      # Exposto no host também (não só na rede interna do compose) para
+      # permitir rodar `prisma migrate dev`/seeds a partir do host com
+      # pnpm, fora de qualquer container — útil para iterar em schema sem
+      # rebuildar a imagem da API a cada mudança.
+      - '5432:5432'
+    volumes:
+      - varanda_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U varanda']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Serviço de uso único (não sobe com `docker compose up` sem o serviço
+  # ser chamado explicitamente por nome) — aplica as migrações dentro do
+  # mesmo container de produção, exatamente como o Pre-Deploy Command do
+  # Railway faz (ver Dockerfile). Rodar com:
+  #   docker compose run --rm migrate
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://varanda:varanda_dev_local@postgres:5432/varanda
+      DIRECT_URL: postgresql://varanda:varanda_dev_local@postgres:5432/varanda
+    command: ['./node_modules/.bin/prisma', 'migrate', 'deploy', '--config', 'prisma.config.ts']
+    profiles: ['tools']
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://varanda:varanda_dev_local@postgres:5432/varanda
+      DIRECT_URL: postgresql://varanda:varanda_dev_local@postgres:5432/varanda
+      JWT_SECRET: dev-local-jwt-secret-nao-usar-em-producao
+      AGENT_HMAC_SECRET: dev-local-agent-hmac-secret-nao-usar-em-producao
+      # http://localhost:5173 — porta default do `vite dev` do frontend.
+      CORS_ORIGIN: http://localhost:5173
+      PORT: '8080'
+      # Card A4 — sem isto, StorageService cai no default (diretório dentro
+      # do próprio container), que se perde a cada `docker compose down`/
+      # rebuild. Com o volume nomeado abaixo, arquivos enviados (extratos,
+      # comprovantes) sobrevivem exatamente como sobreviveriam ao volume
+      # persistente do Railway em produção.
+      STORAGE_DIR: /data/arquivos
+    volumes:
+      - varanda_storage:/data/arquivos
+    ports:
+      - '8080:8080'
+    healthcheck:
+      test: ['CMD', 'node', '-e', "require('http').get('http://localhost:8080/api/v1/health/live', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  varanda_pg_data:
+  varanda_storage:
