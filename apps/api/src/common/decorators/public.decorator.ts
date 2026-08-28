@@ -6,10 +6,14 @@ import { SetMetadata } from '@nestjs/common';
  * Authorization: Bearer. Usado em /auth/login, /auth/google, /auth/refresh
  * e nos dois endpoints de /health.
  *
- * Rotas do agente local (sync/heartbeat/backup, Cards I1/I2/I4) NÃO usam
- * este decorator: elas são público do ponto de vista do RolesGuard (não têm
- * usuário/JWT), mas exigem HmacAuthGuard explícito no controller — @Public
- * sozinho as deixaria sem autenticação nenhuma.
+ * Rotas do agente local (sync/heartbeat/backup, Cards I1/I2/I4) TAMBÉM
+ * precisam de @Public(): sem ele, o RolesGuard global rejeitaria com 401
+ * ANTES da requisição sequer chegar no HmacAuthGuard do controller (guards
+ * globais rodam para toda rota, @Public() ou não, e todos precisam
+ * aprovar). @Public() sozinho, porém, não basta — ele só faz o RolesGuard
+ * se afastar, não autentica nada; por isso essas rotas SEMPRE combinam
+ * @Public() com @UseGuards(HmacAuthGuard) explícito no controller, nunca
+ * uma ou outra isoladamente.
  */
 export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(IS_PUBLIC_KEY, true);

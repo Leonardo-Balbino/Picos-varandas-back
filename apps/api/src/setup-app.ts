@@ -1,13 +1,33 @@
 import type { INestApplication } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import type { RequestWithTraceId } from './common/types/request-with-trace';
 
 /**
  * Configuração compartilhada entre o bootstrap real (main.ts) e qualquer app
  * de teste que precise exercitar o mesmo pipeline (CORS, validação, filtro
- * de exceções) — para as duas versões nunca poderem divergir.
+ * de exceções) — para as duas versões nunca poderem divergir. Exige que a
+ * app tenha sido criada com `{ bodyParser: false }` (ver main.ts) — aqui só
+ * registramos o parser, não desligamos o automático do Nest.
  */
 export function configureApp(app: INestApplication): void {
+  // json({ verify }): captura o corpo bruto em request.rawBody ANTES do
+  // parse, para o HmacAuthGuard (Card I1) recalcular a assinatura HMAC do
+  // agente local sobre exatamente os mesmos bytes que ele assinou —
+  // reserializar o body já parseado (JSON.stringify) não garante bytes
+  // idênticos (ordem de chaves, espaçamento). Rotas sem HMAC simplesmente
+  // não leem rawBody; nenhum custo para elas além do parser em si, que já
+  // rodava de qualquer forma.
+  app.use(
+    json({
+      verify: (req: RequestWithTraceId, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
+  app.use(urlencoded({ extended: true }));
+
   // Trust proxy (Sessão 2 — Railway): a aplicação roda atrás do proxy
   // reverso do Railway, então sem isto `req.ip` traz o IP interno do
   // proxy — igual para todo mundo — e o rate limit de login (Card B1,

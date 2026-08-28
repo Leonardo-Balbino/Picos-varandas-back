@@ -23,6 +23,7 @@
     "@prisma/adapter-pg": "7.9.1",
     "@prisma/client": "7.9.1",
     "contracts": "workspace:*",
+    "express": "^5.2.1",
     "google-auth-library": "^11.0.2",
     "nestjs-zod": "^5.5.0",
     "pg": "^8.23.0",
