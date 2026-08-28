@@ -115,6 +115,12 @@ COPY --from=builder --chown=app:app /app/apps/api/prisma ./prisma
 # `jiti` (mantido na poda acima), não precisa de um passo de compilação
 # separado.
 COPY --from=builder --chown=app:app /app/apps/api/prisma.config.ts ./prisma.config.ts
+# Card A4 — ponto de montagem do volume de storage, criado (e com dono
+# certo) ANTES do volume ser montado: um volume Docker/Railway nomeado
+# herda o dono/permissão do diretório já existente na imagem na primeira
+# montagem; sem isto o Docker cria o ponto de montagem como root e o
+# processo (USER app, não-root) não consegue escrever nele.
+RUN mkdir -p /data/arquivos && chown -R app:app /data/arquivos
 USER app
 EXPOSE 8080
 CMD ["node", "dist/main.js"]

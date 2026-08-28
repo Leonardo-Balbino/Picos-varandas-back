@@ -9,3 +9,5 @@
 export * from './common';
 export * from './auth';
 export * from './sync';
+export * from './arquivos';
+export * from './conciliacao';

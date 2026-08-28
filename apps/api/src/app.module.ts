@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { SecurityModule } from './common/security/security.module';
 import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
 import { InfraModule } from './infra/infra.module';
+import { ArquivosModule } from './modules/arquivos/arquivos.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ConciliacaoModule } from './modules/conciliacao/conciliacao.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
@@ -17,6 +18,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
     SecurityModule,
     HealthModule,
     AuthModule,
+    ArquivosModule,
     UsuariosModule,
     DashboardModule,
     ConciliacaoModule,

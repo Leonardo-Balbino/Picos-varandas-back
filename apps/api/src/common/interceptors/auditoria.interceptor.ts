@@ -99,12 +99,14 @@ export class AuditoriaInterceptor implements NestInterceptor {
   }
 
   private resolverEntidadeId(respostaDoHandler: unknown, request: RequestWithAudit): string {
-    const idDaResposta =
-      respostaDoHandler && typeof respostaDoHandler === 'object' && 'id' in respostaDoHandler
-        ? (respostaDoHandler as { id?: unknown }).id
-        : undefined;
-    if (typeof idDaResposta === 'string') {
-      return idDaResposta;
+    if (respostaDoHandler && typeof respostaDoHandler === 'object') {
+      // 'id' cobre criação de entidade única (ex.: usuário, arquivo);
+      // 'arquivoId' cobre endpoints de processamento em lote que operam
+      // sobre um arquivo já existente e não criam uma entidade nova com
+      // 'id' próprio (ex.: Card D1 — processar extrato).
+      const objeto = respostaDoHandler as { id?: unknown; arquivoId?: unknown };
+      if (typeof objeto.id === 'string') return objeto.id;
+      if (typeof objeto.arquivoId === 'string') return objeto.arquivoId;
     }
     const idDaRota = request.params?.id;
     return typeof idDaRota === 'string' ? idDaRota : 'desconhecido';

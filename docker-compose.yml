@@ -72,6 +72,14 @@ services:
       # http://localhost:5173 — porta default do `vite dev` do frontend.
       CORS_ORIGIN: http://localhost:5173
       PORT: '8080'
+      # Card A4 — sem isto, StorageService cai no default (diretório dentro
+      # do próprio container), que se perde a cada `docker compose down`/
+      # rebuild. Com o volume nomeado abaixo, arquivos enviados (extratos,
+      # comprovantes) sobrevivem exatamente como sobreviveriam ao volume
+      # persistente do Railway em produção.
+      STORAGE_DIR: /data/arquivos
+    volumes:
+      - varanda_storage:/data/arquivos
     ports:
       - '8080:8080'
     healthcheck:
@@ -82,3 +90,4 @@ services:
 
 volumes:
   varanda_pg_data:
+  varanda_storage:
