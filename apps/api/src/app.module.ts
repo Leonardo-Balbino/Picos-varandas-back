@@ -1,4 +1,5 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { SecurityModule } from './common/security/security.module';
 import { TraceIdMiddleware } from './common/middleware/trace-id.middleware';
 import { InfraModule } from './infra/infra.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -13,6 +14,7 @@ import { UsuariosModule } from './modules/usuarios/usuarios.module';
 @Module({
   imports: [
     InfraModule,
+    SecurityModule,
     HealthModule,
     AuthModule,
     UsuariosModule,

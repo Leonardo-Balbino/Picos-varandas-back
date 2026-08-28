@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
 import { OAuth2Client } from 'google-auth-library';
-import type { UsuarioPublico } from 'contracts';
+import type { MeResponse, UsuarioPublico } from 'contracts';
 import { AppException } from '../../common/exceptions/app.exception';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import type { AccessTokenPayload } from './token-payload';
@@ -25,6 +25,7 @@ export interface TokenPar {
   refreshToken: string;
   expiresIn: number;
   usuario: UsuarioPublico;
+  precisaTrocarSenha: boolean;
 }
 
 @Injectable()
@@ -150,12 +151,53 @@ export class AuthService {
     return this.emitirParDeTokens(usuario, registro.familiaId);
   }
 
-  async me(usuarioId: string): Promise<UsuarioPublico> {
+  async me(usuarioId: string): Promise<MeResponse> {
     const usuario = await this.prisma.usuario.findUnique({ where: { id: usuarioId } });
     if (!usuario) {
       throw this.credenciaisInvalidas();
     }
-    return this.paraUsuarioPublico(usuario);
+    return { ...this.paraUsuarioPublico(usuario), precisaTrocarSenha: usuario.precisaTrocarSenha };
+  }
+
+  /** POST /auth/trocar-senha (Passo 0.4 — fecha a lacuna aberta pelo campo
+   * `precisaTrocarSenha`). Exige a senha atual mesmo em troca obrigatória —
+   * um access token roubado sozinho não deve bastar para assumir a conta
+   * definitivamente. Reaproveita o par existente ou emite um novo
+   * (preferido: incrementa tokenVersion, então requisições concorrentes com
+   * o token antigo passam a exigir refresh, igual a uma inativação). */
+  async trocarSenha(usuarioId: string, senhaAtual: string, novaSenha: string): Promise<TokenPar> {
+    const usuario = await this.prisma.usuario.findUnique({ where: { id: usuarioId } });
+    if (!usuario) {
+      throw this.credenciaisInvalidas();
+    }
+
+    const senhaAtualCorreta = await argon2Verify(usuario.senhaHash ?? DUMMY_HASH, senhaAtual).catch(
+      () => false,
+    );
+    if (!usuario.senhaHash || !senhaAtualCorreta) {
+      throw new AppException({
+        status: 401,
+        code: 'UNAUTHORIZED',
+        message: 'Senha atual incorreta.',
+      });
+    }
+
+    const novoHash = await argon2Hash(novaSenha);
+    // tokenVersion incrementa: mesmo mecanismo de invalidação imediata usado
+    // para `ativo: false` (Card J1) — qualquer access token emitido antes da
+    // troca deixa de validar em AuthService.validarAccessToken.
+    const atualizado = await this.prisma.usuario.update({
+      where: { id: usuarioId },
+      data: {
+        senhaHash: novoHash,
+        precisaTrocarSenha: false,
+        tokenVersion: { increment: 1 },
+      },
+    });
+
+    // Novo par de tokens na mesma família seria incorreto aqui (não veio de
+    // um refresh) — abre uma família nova, igual ao login.
+    return this.emitirParDeTokens(atualizado, randomUUID());
   }
 
   async logout(usuarioId: string, refreshTokenBruto: string): Promise<void> {
@@ -172,7 +214,7 @@ export class AuthService {
     await this.revogarFamilia(registro.familiaId);
   }
 
-  /** Verificação usada pelo JwtAuthGuard. Decodifica e valida assinatura +
+  /** Verificação usada pelo RolesGuard. Decodifica e valida assinatura +
    * expiração do JWT, e confere tokenVersion/ativo contra o banco — é essa
    * segunda parte que faz a invalidação por `ativo: false` ser imediata em
    * vez de esperar os 15 minutos do token. */
@@ -201,6 +243,7 @@ export class AuthService {
       avatarUrl: string | null;
       ativo: boolean;
       tokenVersion: number;
+      precisaTrocarSenha: boolean;
     },
     familiaId: string,
   ): Promise<TokenPar> {
@@ -228,6 +271,7 @@ export class AuthService {
       refreshToken: refreshTokenBruto,
       expiresIn: ACCESS_TOKEN_TTL_SEGUNDOS,
       usuario: this.paraUsuarioPublico(usuario),
+      precisaTrocarSenha: usuario.precisaTrocarSenha,
     };
   }
 

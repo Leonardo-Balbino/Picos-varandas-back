@@ -7,11 +7,10 @@
  * senha.
  *
  * Senha vem de `SEED_ADMIN_PASSWORD` (variável de ambiente, nunca fixa no
- * código) e é a mesma para os dois na primeira execução — ainda não há
- * campo de "trocar senha no primeiro acesso" no modelo `Usuario` (decisão
- * explícita: não adicionar por enquanto), então por ora cada um troca a
- * própria senha manualmente depois que o CRUD de usuários (Card J1) or um
- * endpoint de troca de senha existir.
+ * código) e é a mesma para os dois na primeira execução. `precisaTrocarSenha`
+ * é marcado `true` na criação (reversão da decisão original deste script de
+ * não modelar o campo — Passo 0.4 de uma sessão posterior): o frontend deve
+ * forçar a troca no primeiro login via POST /auth/trocar-senha.
  *
  * Hash com @node-rs/argon2 (argon2id) — o mesmo algoritmo usado no login
  * (AuthService.hashSenha/argon2Verify), para não introduzir um segundo
@@ -57,7 +56,14 @@ async function main(): Promise<void> {
     }
 
     const criado = await prisma.usuario.create({
-      data: { nome: admin.nome, email: admin.email, senhaHash, perfil: 'admin', ativo: true },
+      data: {
+        nome: admin.nome,
+        email: admin.email,
+        senhaHash,
+        perfil: 'admin',
+        ativo: true,
+        precisaTrocarSenha: true,
+      },
     });
     console.log(`Criado: ${criado.email} (id: ${criado.id}).`);
   }

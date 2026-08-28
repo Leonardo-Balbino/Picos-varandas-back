@@ -17,9 +17,10 @@ import { PrismaClient } from '../../generated/prisma/client';
  *
  * Construir o adapter/pool aqui NÃO abre conexão — pg.Pool só conecta de
  * fato na primeira query. A conexão continua lazy (seção 3.6, item 4):
- * NÃO chamamos this.$connect() em onModuleInit. Se conectássemos no boot,
- * toda instância — mesmo as que só respondem GET /health/live — acordaria
- * o Neon (scale-to-zero) à toa.
+ * NÃO chamamos this.$connect() em onModuleInit. Conectar no boot abriria
+ * conexões ociosas contra o Postgres a cada novo deploy/restart do Railway
+ * (que acontece com frequência — cada push em main gera uma revisão nova),
+ * inclusive em instâncias que só vão responder um GET /health/live.
  */
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleDestroy {
