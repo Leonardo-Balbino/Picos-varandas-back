@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { FechamentoModule } from '../fechamento/fechamento.module';
 import { VendasSyncController } from './vendas/vendas-sync.controller';
 import { VendasSyncService } from './vendas/vendas-sync.service';
+import { HeartbeatService } from './heartbeat.service';
+import { BackupUploadController } from './backups/backup-upload.controller';
+import { BackupUploadService } from './backups/backup-upload.service';
 
 /**
  * Ingestão de vendas do PDV via agente local (I1) e heartbeat /
@@ -12,7 +15,7 @@ import { VendasSyncService } from './vendas/vendas-sync.service';
  */
 @Module({
   imports: [FechamentoModule],
-  controllers: [VendasSyncController],
-  providers: [VendasSyncService],
+  controllers: [VendasSyncController, BackupUploadController],
+  providers: [VendasSyncService, HeartbeatService, BackupUploadService],
 })
 export class SyncModule {}

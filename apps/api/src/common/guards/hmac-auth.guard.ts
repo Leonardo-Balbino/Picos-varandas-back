@@ -13,7 +13,7 @@ const JANELA_ANTI_REPLAY_MS = 5 * 60 * 1000;
  * — do ponto de vista do RolesGuard elas simplesmente não existem, porque
  * este guard roda no controller, não no pipeline global de segurança.
  *
- * `X-Signature = HMAC-SHA256(AGENT_HMAC_SECRET, X-Timestamp + "." + corpo_bruto)`.
+ * `X-Signature = HMAC-SHA256(secret, X-Agent-Id + "." + X-Timestamp + "." + corpo_bruto)`.
  * O corpo BRUTO (request.rawBody, capturado em setup-app.ts antes do parse
  * JSON) é obrigatório aqui — reserializar o body já parseado não garante
  * os mesmos bytes que o agente assinou. A diferença em relação a uma API
@@ -35,6 +35,9 @@ export class HmacAuthGuard implements CanActivate {
     if (!agentId || !timestampBruto || !assinatura) {
       throw this.naoAutorizado('Headers de autenticação do agente ausentes.');
     }
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(agentId) || !/^[a-f0-9]{64}$/i.test(assinatura)) {
+      throw this.naoAutorizado('Headers de autenticação do agente inválidos.');
+    }
 
     const timestampMs = Date.parse(timestampBruto);
     if (Number.isNaN(timestampMs)) {
@@ -48,7 +51,7 @@ export class HmacAuthGuard implements CanActivate {
       throw this.naoAutorizado('X-Timestamp fora da janela de tolerância.');
     }
 
-    const segredo = process.env.AGENT_HMAC_SECRET;
+    const segredo = this.segredoDoAgente(agentId);
     if (!segredo) {
       // Falha de configuração do servidor, não do agente — não é 401.
       throw new AppException({
@@ -60,7 +63,7 @@ export class HmacAuthGuard implements CanActivate {
 
     const corpoBruto = request.rawBody ?? Buffer.alloc(0);
     const assinaturaEsperada = createHmac('sha256', segredo)
-      .update(`${timestampBruto}.`)
+      .update(`${agentId}.${timestampBruto}.`)
       .update(corpoBruto)
       .digest('hex');
 
@@ -69,6 +72,7 @@ export class HmacAuthGuard implements CanActivate {
       throw this.naoAutorizado('Assinatura inválida.');
     }
 
+    request.agentId = agentId;
     return true;
   }
 
@@ -86,9 +90,33 @@ export class HmacAuthGuard implements CanActivate {
 
   private headerUnico(valor: string | string[] | undefined): string | null {
     if (Array.isArray(valor)) {
-      return valor[0] ?? null;
+      // Headers repetidos são ambíguos entre proxy, Node e aplicação.
+      return valor.length === 1 ? valor[0] ?? null : null;
     }
     return valor ?? null;
+  }
+
+  private segredoDoAgente(agentId: string): string | undefined {
+    const bruto = process.env.AGENT_HMAC_SECRETS_JSON;
+    if (bruto) {
+      try {
+        const mapa = JSON.parse(bruto) as unknown;
+        if (!mapa || typeof mapa !== 'object' || Array.isArray(mapa)) throw new Error();
+        const valor = (mapa as Record<string, unknown>)[agentId];
+        if (typeof valor === 'string' && Buffer.byteLength(valor, 'utf8') >= 32) return valor;
+        throw this.naoAutorizado('Agente não cadastrado.');
+      } catch (erro) {
+        // AppException acima representa agente desconhecido e deve conservar 401.
+        if (erro instanceof AppException) throw erro;
+        throw new AppException({
+          status: 500,
+          code: 'INTERNAL_ERROR',
+          message: 'Mapa de autenticação dos agentes está inválido.',
+        });
+      }
+    }
+    // Compatibilidade durante a migração de uma única instalação.
+    return process.env.AGENT_HMAC_SECRET;
   }
 
   private naoAutorizado(message: string): AppException {

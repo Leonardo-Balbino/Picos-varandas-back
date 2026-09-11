@@ -30,6 +30,7 @@ export const vendaPdvItemSchema = requestSchema({
   valorDesconto: valorMonetarioSchema.optional(),
   valorLiquido: valorMonetarioSchema,
   formaPagamento: formaPagamentoSchema,
+  cancelada: z.boolean().default(false),
   bandeira: z.string().optional(),
 });
 export type VendaPdvItemInput = z.infer<typeof vendaPdvItemSchema>;
@@ -64,3 +65,47 @@ export const ingerirVendasPdvResponseSchema = z.object({
   rejeitadas: z.array(vendaRejeitadaSchema),
 });
 export type IngerirVendasPdvResponse = z.infer<typeof ingerirVendasPdvResponseSchema>;
+
+export const agenteHeartbeatSchema = requestSchema({
+  versaoAgente: z.string().min(1).max(50),
+  metricas: z.record(z.string(), z.unknown()).optional(),
+});
+export type AgenteHeartbeatInput = z.infer<typeof agenteHeartbeatSchema>;
+
+const sha256HexSchema = z.string().regex(/^[a-f0-9]{64}$/);
+
+export const iniciarUploadBackupSchema = requestSchema({
+  schemaVersion: z.literal(1),
+  idempotencyKey: z.string().min(1).max(256),
+  source: requestSchema({
+    fileName: z.string().min(1).max(255),
+    size: z.number().int().nonnegative().max(100 * 1024 * 1024 * 1024),
+    sha256: sha256HexSchema,
+    modifiedAtNs: z.string().regex(/^\d{1,30}$/),
+  }),
+  envelope: requestSchema({
+    format: z.literal('PVAENC01'),
+    size: z.number().int().positive().max(100 * 1024 * 1024 * 1024),
+    sha256: sha256HexSchema,
+  }),
+});
+export type IniciarUploadBackupInput = z.infer<typeof iniciarUploadBackupSchema>;
+
+export const prepararParteUploadBackupSchema = requestSchema({
+  partNumber: z.number().int().min(1).max(10_000),
+  offset: z.number().int().nonnegative(),
+  size: z.number().int().positive().max(16 * 1024 * 1024),
+  sha256: sha256HexSchema,
+});
+export type PrepararParteUploadBackupInput = z.infer<typeof prepararParteUploadBackupSchema>;
+
+export const confirmarParteUploadBackupSchema = prepararParteUploadBackupSchema.extend({
+  etag: z.string().min(1).max(256),
+});
+export type ConfirmarParteUploadBackupInput = z.infer<typeof confirmarParteUploadBackupSchema>;
+
+export const concluirUploadBackupSchema = requestSchema({
+  encryptedSize: z.number().int().positive().max(100 * 1024 * 1024 * 1024),
+  encryptedSha256: sha256HexSchema,
+});
+export type ConcluirUploadBackupInput = z.infer<typeof concluirUploadBackupSchema>;

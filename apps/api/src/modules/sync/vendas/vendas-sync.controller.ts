@@ -4,6 +4,8 @@ import { Public } from '../../../common/decorators/public.decorator';
 import { HmacAuthGuard } from '../../../common/guards/hmac-auth.guard';
 import { IngerirVendasDto } from './dto/ingerir-vendas.dto';
 import { VendasSyncService } from './vendas-sync.service';
+import { HeartbeatDto } from '../heartbeat.dto';
+import { HeartbeatService } from '../heartbeat.service';
 
 // @Public() + @UseGuards(HmacAuthGuard) sempre juntos aqui (ver o
 // comentário em Public() para o porquê de precisar dos dois): o agente
@@ -13,7 +15,22 @@ import { VendasSyncService } from './vendas-sync.service';
 @UseGuards(HmacAuthGuard)
 @Controller('sync')
 export class VendasSyncController {
-  constructor(private readonly vendasSyncService: VendasSyncService) {}
+  constructor(
+    private readonly vendasSyncService: VendasSyncService,
+    private readonly heartbeatService: HeartbeatService,
+  ) {}
+
+  @HttpCode(HttpStatus.OK)
+  @Post('validate')
+  validar(): { ok: true } {
+    return { ok: true };
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('heartbeat')
+  heartbeat(@Body() dto: HeartbeatDto): Promise<{ ok: true }> {
+    return this.heartbeatService.registrar(dto);
+  }
 
   @HttpCode(HttpStatus.OK)
   @Post('vendas-pdv')

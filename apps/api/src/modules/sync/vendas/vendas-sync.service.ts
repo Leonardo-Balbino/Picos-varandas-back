@@ -53,6 +53,22 @@ export class VendasSyncService {
             where: { idExternoPdv: item.idExterno },
           });
 
+          if (item.cancelada) {
+            if (existente?.statusConciliacao === 'pendente') {
+              await tx.vendaPdv.delete({ where: { id: existente.id } });
+              atualizadas++;
+            } else if (existente) {
+              rejeitadas.push({
+                idExterno: item.idExterno,
+                motivo: 'CANCELLED_AFTER_RECONCILIATION',
+                competencia,
+              });
+            } else {
+              ignoradas++;
+            }
+            continue;
+          }
+
           if (existente && existente.statusConciliacao !== 'pendente') {
             // Regra 1 — nunca sobrescrever venda já conciliada.
             ignoradas++;
@@ -95,7 +111,9 @@ export class VendasSyncService {
             status: rejeitadas.length > 0 ? 'parcial' : 'sucesso',
             erroDetalhe:
               rejeitadas.length > 0
-                ? `${rejeitadas.length} venda(s) rejeitada(s) por período trancado`
+                ? `${rejeitadas.length} transação(ões) rejeitada(s): ${[
+                    ...new Set(rejeitadas.map((item) => item.motivo)),
+                  ].join(', ')}`
                 : null,
           },
         });

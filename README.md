@@ -1,5 +1,10 @@
 # Restaurante Varanda — Backend
 
+> O estado detalhado mais recente está em `ESTADO_DO_PROJETO.md`. O upload
+> criptografado de backups e seu worker estão descritos em
+> `DEPLOY_BACKUPS_RAILWAY.md`; partes deste README sobre o scaffold inicial e
+> Google Cloud estão preservadas apenas como histórico e estão desatualizadas.
+
 Sistema de conciliação bancário-fiscal e gestão financeira sob medida para o
 Restaurante Varanda. Especificação completa: `Documentação de especificação
 tecnica- Kamban v2.pdf` (Cards do Kanban, **v2.2** — inclui as correções da

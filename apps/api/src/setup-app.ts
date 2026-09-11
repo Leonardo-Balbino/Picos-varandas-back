@@ -21,6 +21,7 @@ export function configureApp(app: INestApplication): void {
   // rodava de qualquer forma.
   app.use(
     json({
+      limit: '1mb',
       verify: (req: RequestWithTraceId, _res, buf) => {
         req.rawBody = buf;
       },

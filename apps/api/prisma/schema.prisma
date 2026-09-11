@@ -224,6 +224,19 @@ enum StatusArquivo {
   confirmado
 }
 
+// Ciclo do arquivo opaco enviado pelo agente. `validado` só é alcançado
+// depois de o worker conferir o SHA-256 do objeto e autenticar integralmente
+// o envelope PVAENC01 com a chave privada que não existe no servidor cliente.
+enum StatusUploadBackup {
+  enviando
+  recebido
+  processando
+  validado
+  falhou
+  quarentena
+  expirado
+}
+
 // Vendas do PDV local (Dontec), recebidas via sync do agente (Card I1).
 // Nunca criada/alterada por usuário humano diretamente — só o endpoint de
 // sync escreve aqui (upsert por idExternoPdv).
@@ -529,4 +542,54 @@ model BackupPdvLocal {
   arquivo Arquivo @relation(fields: [arquivoId], references: [id])
 
   @@map("backups_pdv_local")
+}
+
+// Upload retomável de um backup já criptografado pelo agente. Os tamanhos são
+// BigInt porque um arquivo pode ultrapassar o limite de Int do Postgres/Prisma.
+// O nome original é apenas metadado; a chave do objeto sempre nasce no backend.
+model UploadBackupPdv {
+  id                 String              @id @default(uuid())
+  agenteId           String              @map("agente_id")
+  chaveIdempotencia  String              @map("chave_idempotencia")
+  nomeOrigem         String              @map("nome_origem")
+  tamanhoOrigem      BigInt              @map("tamanho_origem")
+  sha256Origem       String              @map("sha256_origem")
+  mtimeOrigemNs      String              @map("mtime_origem_ns")
+  formatoEnvelope    String              @map("formato_envelope")
+  tamanhoEnvelope    BigInt              @map("tamanho_envelope")
+  sha256Envelope     String              @map("sha256_envelope")
+  chaveObjeto        String              @unique @map("chave_objeto")
+  multipartUploadId  String?             @map("multipart_upload_id")
+  proximoOffset      BigInt              @default(0) @map("proximo_offset")
+  status             StatusUploadBackup  @default(enviando)
+  erroDetalhe        String?             @map("erro_detalhe")
+  tentativas         Int                 @default(0)
+  recebidoEm         DateTime?           @map("recebido_em") @db.Timestamptz(3)
+  validadoEm         DateTime?           @map("validado_em") @db.Timestamptz(3)
+  criadoEm           DateTime            @default(now()) @map("criado_em") @db.Timestamptz(3)
+  atualizadoEm       DateTime            @updatedAt @map("atualizado_em") @db.Timestamptz(3)
+
+  partes ParteUploadBackupPdv[]
+
+  @@unique([agenteId, chaveIdempotencia])
+  @@index([status, atualizadoEm])
+  @@index([agenteId, criadoEm])
+  @@map("uploads_backup_pdv")
+}
+
+model ParteUploadBackupPdv {
+  id           String          @id @default(uuid())
+  uploadId     String          @map("upload_id")
+  numeroParte  Int             @map("numero_parte")
+  offsetBytes  BigInt          @map("offset_bytes")
+  tamanhoBytes Int             @map("tamanho_bytes")
+  sha256       String
+  etag         String
+  criadoEm     DateTime        @default(now()) @map("criado_em") @db.Timestamptz(3)
+
+  upload UploadBackupPdv @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@unique([uploadId, numeroParte])
+  @@unique([uploadId, offsetBytes])
+  @@map("partes_upload_backup_pdv")
 }

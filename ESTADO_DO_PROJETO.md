@@ -39,18 +39,18 @@ lojas/empresas no backend (isso foi uma correção em relação a uma versão de
 | Banco | PostgreSQL | Em produção: Railway. Local: container `postgres:16-alpine` via `docker-compose.yml` |
 | Validação | Zod, schemas em `packages/contracts` | `class-validator` **proibido** no projeto |
 | Deploy | **Railway** (Dockerfile na raiz) | A spec original previa Google Cloud Run + Neon + Cloudflare R2 — **isso foi trocado**. `README.md` e `.env.example` ainda mencionam Cloud Run/Secret Manager em alguns pontos — desatualizados, ignorar. |
-| Storage de arquivo | **Volume persistente do Railway** (`StorageService`, disco local) | Também trocado — a spec original previa Cloudflare R2 com URL pré-assinada. Decisão consciente desta fase do projeto: upload passa pela própria API (multipart), não é direto do cliente pro storage. |
+| Storage de arquivo | Volume Railway para documentos; Storage Bucket privado para backups do ERP | Backups grandes usam multipart direto por URL pré-assinada e são validados por worker separado. |
 | CI | GitHub Actions (`.github/workflows/ci.yml`) | Só valida (install → prisma generate → lint → build → test). **Não faz deploy nem migração** — deploy é a integração nativa GitHub↔Railway; migração roda como Pre-Deploy Command do próprio serviço Railway, usando a CLI do Prisma preservada na imagem de runtime. |
 
 ### Variáveis de ambiente que a API espera
 `DATABASE_URL`, `DIRECT_URL` (Postgres), `JWT_SECRET` (obrigatória, API não sobe sem ela),
-`GOOGLE_CLIENT_ID` (opcional — sem ela, login Google responde 500), `AGENT_HMAC_SECRET`
+`GOOGLE_CLIENT_ID` (opcional — sem ela, login Google responde 500), `AGENT_HMAC_SECRETS_JSON`
 (obrigatória para as rotas do agente), `CORS_ORIGIN` (lista separada por vírgula, sem ela CORS fica
 desabilitado), `STORAGE_DIR` (opcional, default para um diretório dentro do próprio processo — em
 produção real precisa apontar para o volume montado), `PORT` (injetada pela plataforma).
 
 `apps/api/.env.example` está desatualizado (ainda fala de Cloud Run/Secret Manager, não lista
-`AGENT_HMAC_SECRET` nem `STORAGE_DIR`) — não confiar nele cegamente.
+as variáveis de bucket nem `STORAGE_DIR`) — consulte também `DEPLOY_BACKUPS_RAILWAY.md`.
 
 ### Como rodar localmente
 ```bash
@@ -108,14 +108,14 @@ Usuário de teste seed: `admin@varanda.local` / `TrocarSenha123` (com `precisaTr
 | G1 | Caixa físico/cofre | ✅ Feito | |
 | H1/H2 | Fechamento mensal + trava | ✅ Feito | Grade anual, trancar/destrancar, guard de período |
 | I1 | Ingestão de vendas do agente | ✅ Feito | HMAC-SHA256, testado com dados reais |
-| I2 | Heartbeat do agente | ❌ Não feito | Só o model Prisma existe, sem endpoint |
+| I2 | Heartbeat do agente | ✅ Feito | Endpoint HMAC `/sync/heartbeat` |
 | I3 | Agente Python (executável) | ❌ Não feito, fora de escopo por decisão sua | |
-| I4 | Backup do PDV legado (endpoints) | ❌ Não feito | Só o model Prisma existe, sem endpoint |
+| I4 | Transporte do backup do PDV | ⚠️ Parcial seguro | Upload multipart + validação PVAENC01 prontos; extração/Firebird remoto aguardam amostra real |
 | J1 | Usuários + config (taxas, categorias) | ✅ Feito | |
 | L1 | Frontend deploy | — | Repo separado (`Picos-Varandas-front`), fora deste backend |
 
 **Resumo:** de ~24 cards de backend aplicáveis (excluindo I3, que é o agente desktop), **20 estão
-prontos**, 1 parcial (D4), 3 não começados (A5, I2, I4).
+prontos**, 2 parciais (D4 e processamento final do I4) e A5 não iniciado.
 
 ---
 
@@ -162,6 +162,13 @@ Admin apenas:
 
 Agente local (HMAC, não Bearer):
   POST /api/v1/sync/vendas-pdv
+  POST /api/v1/sync/validate
+  POST /api/v1/sync/heartbeat
+  POST /api/v1/sync/backups/initiate
+  POST /api/v1/sync/backups/:uploadId/parts
+  POST /api/v1/sync/backups/:uploadId/parts/:partNumber/confirm
+  POST /api/v1/sync/backups/:uploadId/complete
+  POST /api/v1/sync/backups/:uploadId/status
 ```
 
 ---
@@ -170,7 +177,8 @@ Agente local (HMAC, não Bearer):
 
 1. **Revisar D4** (match automático) contra as 3 regras da spec original — o que existe é uma
    versão simplificada.
-2. **I2 (heartbeat)** e **I4 (endpoints de backup do PDV legado)** — pequenos, o schema já existe.
+2. **Finalizar I4 na VPS** — validar uma amostra real de RAR/ZIP e então
+   implementar extração e leitura Firebird dentro de container isolado.
 3. **A5** — backup automatizado do Postgres (o Railway pode ter backup nativo dependendo do plano;
    confirmar antes de construir algo customizado) e alerta de uso/custo.
 4. **OFX e PDF** no parser de extrato — sem amostra real ainda, não dá pra especificar direito.

@@ -11,6 +11,9 @@ import type { Request } from 'express';
  */
 export interface RequestWithTraceId extends Request {
   traceId: string;
+  /** Identidade autenticada pelo HmacAuthGuard. Controllers nunca devem
+   * confiar novamente no valor cru do header. */
+  agentId?: string;
   // Populado pelo `verify` do body-parser em main.ts (bodyParser: false +
   // json({ verify })) — o HmacAuthGuard (Card I1) precisa do corpo BRUTO,
   // antes do parse JSON, para recalcular a assinatura HMAC do agente

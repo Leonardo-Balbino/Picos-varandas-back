@@ -4,8 +4,8 @@ import { HmacAuthGuard } from './hmac-auth.guard';
 
 const SEGREDO = 'segredo-de-teste-do-agente';
 
-function assinar(timestamp: string, corpo: Buffer, segredo = SEGREDO): string {
-  return createHmac('sha256', segredo).update(`${timestamp}.`).update(corpo).digest('hex');
+function assinar(timestamp: string, corpo: Buffer, segredo = SEGREDO, agentId = 'a1'): string {
+  return createHmac('sha256', segredo).update(`${agentId}.${timestamp}.`).update(corpo).digest('hex');
 }
 
 function criarContexto(headers: Record<string, string>, rawBody: Buffer): ExecutionContext {
@@ -17,20 +17,23 @@ function criarContexto(headers: Record<string, string>, rawBody: Buffer): Execut
 
 describe('HmacAuthGuard (Card I1)', () => {
   const OLD_ENV = process.env.AGENT_HMAC_SECRET;
+  const OLD_MAP = process.env.AGENT_HMAC_SECRETS_JSON;
 
   beforeEach(() => {
     process.env.AGENT_HMAC_SECRET = SEGREDO;
+    delete process.env.AGENT_HMAC_SECRETS_JSON;
   });
 
   afterAll(() => {
     process.env.AGENT_HMAC_SECRET = OLD_ENV;
+    process.env.AGENT_HMAC_SECRETS_JSON = OLD_MAP;
   });
 
   it('aceita uma requisição com assinatura válida e timestamp recente', () => {
     const guard = new HmacAuthGuard();
     const corpo = Buffer.from(JSON.stringify({ vendas: [] }));
     const timestamp = new Date().toISOString();
-    const assinatura = assinar(timestamp, corpo);
+    const assinatura = assinar(timestamp, corpo, SEGREDO, 'agente-varanda-01');
 
     const context = criarContexto(
       { 'x-agent-id': 'agente-varanda-01', 'x-timestamp': timestamp, 'x-signature': assinatura },
@@ -77,6 +80,18 @@ describe('HmacAuthGuard (Card I1)', () => {
     expect(() => guard.canActivate(context)).toThrow();
   });
 
+  it('rejeita quando X-Agent-Id é alterado depois da assinatura', () => {
+    const guard = new HmacAuthGuard();
+    const corpo = Buffer.from('{}');
+    const timestamp = new Date().toISOString();
+    const assinatura = assinar(timestamp, corpo, SEGREDO, 'agente-original');
+    const context = criarContexto(
+      { 'x-agent-id': 'agente-forjado', 'x-timestamp': timestamp, 'x-signature': assinatura },
+      corpo,
+    );
+    expect(() => guard.canActivate(context)).toThrow();
+  });
+
   it('rejeita timestamp fora da janela de 5 minutos (replay)', () => {
     const guard = new HmacAuthGuard();
     const corpo = Buffer.from('{}');
@@ -109,10 +124,42 @@ describe('HmacAuthGuard (Card I1)', () => {
     const timestamp = new Date().toISOString();
 
     const context = criarContexto(
-      { 'x-agent-id': 'a1', 'x-timestamp': timestamp, 'x-signature': 'qualquer' },
+      { 'x-agent-id': 'a1', 'x-timestamp': timestamp, 'x-signature': '0'.repeat(64) },
       corpo,
     );
 
     expect(() => guard.canActivate(context)).toThrow(/não está configurada/);
+  });
+
+  it('seleciona um segredo diferente para cada agente cadastrado', () => {
+    const segredoA = 'a'.repeat(32);
+    const segredoB = 'b'.repeat(32);
+    process.env.AGENT_HMAC_SECRETS_JSON = JSON.stringify({ agenteA: segredoA, agenteB: segredoB });
+    const corpo = Buffer.from('{}');
+    const timestamp = new Date().toISOString();
+    const context = criarContexto(
+      {
+        'x-agent-id': 'agenteB',
+        'x-timestamp': timestamp,
+        'x-signature': assinar(timestamp, corpo, segredoB, 'agenteB'),
+      },
+      corpo,
+    );
+    expect(new HmacAuthGuard().canActivate(context)).toBe(true);
+  });
+
+  it('rejeita agente ausente do mapa de segredos', () => {
+    process.env.AGENT_HMAC_SECRETS_JSON = JSON.stringify({ outro: 'x'.repeat(32) });
+    const corpo = Buffer.from('{}');
+    const timestamp = new Date().toISOString();
+    const context = criarContexto(
+      {
+        'x-agent-id': 'desconhecido',
+        'x-timestamp': timestamp,
+        'x-signature': assinar(timestamp, corpo, 'z'.repeat(32), 'desconhecido'),
+      },
+      corpo,
+    );
+    expect(() => new HmacAuthGuard().canActivate(context)).toThrow(/não cadastrado/);
   });
 });
