@@ -6,7 +6,7 @@
 # apontado por --source. Rodar sempre a partir da raiz do repositório.
 
 # ---------- build ----------
-FROM node:22-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 RUN corepack enable
 
@@ -99,10 +99,25 @@ RUN find /out/node_modules/.pnpm -maxdepth 1 \( \
       -delete
 
 # ---------- runtime ----------
-FROM node:22-alpine AS runner
+FROM node:22-bookworm-slim AS runner
 WORKDIR /app
-ENV NODE_ENV=production TZ=UTC
-RUN addgroup -S app && adduser -S app -G app
+ENV NODE_ENV=production TZ=UTC FIREBIRD=/opt/firebird LD_LIBRARY_PATH=/opt/firebird/lib
+RUN groupadd -r app && useradd -r -g app app
+
+# Dependências para extração e execução do Firebird 2.5 (ODS 11.2)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates libncurses6 python3 \
+  && mkdir -p /opt/firebird \
+  && curl -sSL "https://github.com/FirebirdSQL/firebird/releases/download/R2_5_9/FirebirdCS-2.5.9.27139-0.amd64.tar.gz" -o /tmp/fb.tar.gz \
+  && tar -xzf /tmp/fb.tar.gz -C /tmp \
+  && tar -xzf /tmp/FirebirdCS-2.5.9.27139-0.amd64/buildroot.tar.gz -C / \
+  && rm -rf /tmp/fb.tar.gz /tmp/FirebirdCS* \
+  && ln -sf /usr/lib/x86_64-linux-gnu/libncursesw.so.6 /opt/firebird/lib/libncurses.so.5 \
+  && chown -R app:app /opt/firebird \
+  && apt-get purge -y curl \
+  && apt-get autoremove -y \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder --chown=app:app /out ./
 COPY --from=builder --chown=app:app /app/apps/api/dist ./dist
 COPY --from=builder --chown=app:app /app/apps/api/prisma ./prisma
@@ -124,3 +139,4 @@ RUN mkdir -p /data/arquivos && chown -R app:app /data/arquivos
 USER app
 EXPOSE 8080
 CMD ["node", "dist/main.js"]
+

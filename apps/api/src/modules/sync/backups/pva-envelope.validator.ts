@@ -6,7 +6,9 @@ import {
   createPublicKey,
   privateDecrypt,
 } from 'node:crypto';
-import { open } from 'node:fs/promises';
+import { once } from 'node:events';
+import { createWriteStream } from 'node:fs';
+import { open, rm } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 
 const MAGIC = Buffer.from('PVAENC01', 'ascii');
@@ -44,10 +46,26 @@ function privateKeyPem(): string {
   return decoded;
 }
 
-/** Autentica o envelope e calcula o hash do backup original sem gravar o
- * plaintext em disco. Qualquer byte alterado faz decipher.final() falhar. */
-export async function validatePvaEnvelope(path: string, expected: EnvelopeExpected): Promise<void> {
+/** Autentica o envelope e calcula o hash do backup original. Se destinationPath
+ * for informado, grava o payload descriptografado no destino via streaming,
+ * garantindo remoção imediata caso qualquer byte ou tag GCM falhe. */
+export async function validatePvaEnvelope(
+  path: string,
+  expected: EnvelopeExpected,
+  destinationPath?: string,
+): Promise<void> {
   const handle = await open(path, 'r');
+  const destStream = destinationPath
+    ? createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 })
+    : null;
+
+  const writeChunk = async (chunk: Buffer): Promise<void> => {
+    if (!destStream || chunk.length === 0) return;
+    if (!destStream.write(chunk)) {
+      await once(destStream, 'drain');
+    }
+  };
+
   try {
     const stat = await handle.stat();
     if (stat.size < MAGIC.length + 4 + TAG_SIZE) throw new EnvelopeValidationError('Envelope truncado.');
@@ -109,10 +127,11 @@ export async function validatePvaEnvelope(path: string, expected: EnvelopeExpect
     let metadataSize: number | null = null;
     let metadata: Record<string, unknown> | null = null;
 
-    const consume = (plain: Buffer): void => {
+    const consume = async (plain: Buffer): Promise<void> => {
       if (metadata) {
         payloadHash.update(plain);
         plaintextBytes += BigInt(plain.length);
+        await writeChunk(plain);
         return;
       }
       pending = Buffer.concat([pending, plain]);
@@ -131,6 +150,7 @@ export async function validatePvaEnvelope(path: string, expected: EnvelopeExpect
         const payload = pending.subarray(4 + metadataSize);
         payloadHash.update(payload);
         plaintextBytes += BigInt(payload.length);
+        await writeChunk(payload);
         pending = Buffer.alloc(0);
       }
     };
@@ -143,11 +163,22 @@ export async function validatePvaEnvelope(path: string, expected: EnvelopeExpect
         const length = Math.min(block.length, cipherEnd - position);
         const { bytesRead } = await handle.read({ buffer: block, offset: 0, length, position });
         if (bytesRead === 0) throw new EnvelopeValidationError('Envelope terminou antes do esperado.');
-        consume(decipher.update(block.subarray(0, bytesRead)));
+        await consume(decipher.update(block.subarray(0, bytesRead)));
         position += bytesRead;
       }
-      consume(decipher.final());
+      await consume(decipher.final());
+      if (destStream) {
+        await new Promise<void>((resolve, reject) => {
+          destStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+        });
+      }
     } catch (erro) {
+      if (destStream) {
+        destStream.destroy();
+        if (destinationPath) {
+          await rm(destinationPath, { force: true }).catch(() => undefined);
+        }
+      }
       if (erro instanceof EnvelopeValidationError) throw erro;
       throw new EnvelopeValidationError('Autenticação AES-GCM do envelope falhou.');
     } finally {
@@ -164,8 +195,22 @@ export async function validatePvaEnvelope(path: string, expected: EnvelopeExpect
       plaintextBytes !== expected.sourceSize ||
       payloadHash.digest('hex') !== expected.sourceSha256
     ) {
+      if (destStream) {
+        destStream.destroy();
+      }
+      if (destinationPath) {
+        await rm(destinationPath, { force: true }).catch(() => undefined);
+      }
       throw new EnvelopeValidationError('Conteúdo original diverge do manifesto autenticado.');
     }
+  } catch (erro) {
+    if (destStream) {
+      destStream.destroy();
+    }
+    if (destinationPath) {
+      await rm(destinationPath, { force: true }).catch(() => undefined);
+    }
+    throw erro;
   } finally {
     await handle.close();
   }

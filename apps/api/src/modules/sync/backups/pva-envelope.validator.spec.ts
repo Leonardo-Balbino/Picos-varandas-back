@@ -95,4 +95,47 @@ describe('validatePvaEnvelope', () => {
       }),
     ).rejects.toBeInstanceOf(EnvelopeValidationError);
   });
+
+  it('grava o payload descriptografado em destinationPath quando válido', async () => {
+    const pvaPath = join(directory, 'stream.pva');
+    const destPath = join(directory, 'extraido.zip');
+    await writeFile(pvaPath, envelope());
+
+    await validatePvaEnvelope(
+      pvaPath,
+      {
+        sourceName: 'backup.zip',
+        sourceSize: BigInt(source.length),
+        sourceSha256: sourceHash,
+      },
+      destPath,
+    );
+
+    const { readFile } = await import('node:fs/promises');
+    const gravado = await readFile(destPath);
+    expect(gravado).toEqual(source);
+  });
+
+  it('remove destinationPath se a autenticação falhar', async () => {
+    const altered = envelope();
+    altered[altered.length - 20] ^= 1;
+    const pvaPath = join(directory, 'falho.pva');
+    const destPath = join(directory, 'invalido.zip');
+    await writeFile(pvaPath, altered);
+
+    await expect(
+      validatePvaEnvelope(
+        pvaPath,
+        {
+          sourceName: 'backup.zip',
+          sourceSize: BigInt(source.length),
+          sourceSha256: sourceHash,
+        },
+        destPath,
+      ),
+    ).rejects.toBeInstanceOf(EnvelopeValidationError);
+
+    const { access } = await import('node:fs/promises');
+    await expect(access(destPath)).rejects.toThrow();
+  });
 });

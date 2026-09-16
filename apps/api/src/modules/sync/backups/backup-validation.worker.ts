@@ -8,6 +8,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
 import { BackupBucketService } from '../../../infra/storage/backup-bucket.service';
 import { EnvelopeValidationError, validatePvaEnvelope } from './pva-envelope.validator';
+import { BackupExtractorService } from './backup-extractor.service';
 
 @Injectable()
 export class BackupValidationWorker {
@@ -16,6 +17,7 @@ export class BackupValidationWorker {
   constructor(
     private readonly prisma: PrismaService,
     private readonly bucket: BackupBucketService,
+    private readonly backupExtractor: BackupExtractorService,
   ) {}
 
   async processarPendentes(): Promise<number> {
@@ -49,6 +51,7 @@ export class BackupValidationWorker {
     const upload = await this.prisma.uploadBackupPdv.findUniqueOrThrow({ where: { id: uploadId } });
     const directory = join(tmpdir(), `pva-${randomUUID()}`);
     const envelopePath = join(directory, 'backup.pva');
+    const decryptedBackupPath = join(directory, upload.nomeOrigem);
     try {
       await mkdir(directory, { recursive: false, mode: 0o700 });
       const source = await this.bucket.abrir(upload.chaveObjeto);
@@ -58,16 +61,28 @@ export class BackupValidationWorker {
       if (digest.digest('hex') !== upload.sha256Envelope) {
         throw new EnvelopeValidationError('SHA-256 do objeto armazenado diverge do manifesto.');
       }
-      await validatePvaEnvelope(envelopePath, {
-        sourceName: upload.nomeOrigem,
-        sourceSize: upload.tamanhoOrigem,
-        sourceSha256: upload.sha256Origem,
-      });
+      await validatePvaEnvelope(
+        envelopePath,
+        {
+          sourceName: upload.nomeOrigem,
+          sourceSize: upload.tamanhoOrigem,
+          sourceSha256: upload.sha256Origem,
+        },
+        decryptedBackupPath,
+      );
+      this.logger.log(`Backup ${uploadId} autenticado criptograficamente. Iniciando extração do banco Firebird...`);
+
+      const resultado = await this.backupExtractor.extrairEIngerir(upload, decryptedBackupPath);
+
       await this.prisma.uploadBackupPdv.update({
         where: { id: uploadId },
         data: { status: 'validado', validadoEm: new Date(), erroDetalhe: null },
       });
-      this.logger.log(`Backup ${uploadId} validado criptograficamente.`);
+      this.logger.log(
+        `Backup ${uploadId} validado e processado com sucesso: ${resultado.totalVendas} vendas ` +
+          `(${resultado.totalCriadas} criadas, ${resultado.totalAtualizadas} atualizadas, ` +
+          `${resultado.totalIgnoradas} ignoradas, ${resultado.totalRejeitadas} rejeitadas) em ${resultado.tempoMs}ms.`,
+      );
     } catch (erro) {
       const detalhe = erro instanceof Error ? erro.message.slice(0, 1000) : 'Falha desconhecida.';
       const permanente = erro instanceof EnvelopeValidationError || upload.tentativas >= 10;
@@ -75,7 +90,7 @@ export class BackupValidationWorker {
         where: { id: uploadId },
         data: { status: permanente ? 'quarentena' : 'recebido', erroDetalhe: detalhe },
       });
-      this.logger.error(`Falha ao validar backup ${uploadId}: ${detalhe}`);
+      this.logger.error(`Falha ao validar/extrair backup ${uploadId}: ${detalhe}`);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

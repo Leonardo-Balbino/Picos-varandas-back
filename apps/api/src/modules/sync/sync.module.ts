@@ -5,6 +5,7 @@ import { VendasSyncService } from './vendas/vendas-sync.service';
 import { HeartbeatService } from './heartbeat.service';
 import { BackupUploadController } from './backups/backup-upload.controller';
 import { BackupUploadService } from './backups/backup-upload.service';
+import { BackupExtractorService } from './backups/backup-extractor.service';
 
 /**
  * Ingestão de vendas do PDV via agente local (I1) e heartbeat /
@@ -16,6 +17,7 @@ import { BackupUploadService } from './backups/backup-upload.service';
 @Module({
   imports: [FechamentoModule],
   controllers: [VendasSyncController, BackupUploadController],
-  providers: [VendasSyncService, HeartbeatService, BackupUploadService],
+  providers: [VendasSyncService, HeartbeatService, BackupUploadService, BackupExtractorService],
+  exports: [VendasSyncService, BackupUploadService, BackupExtractorService],
 })
 export class SyncModule {}
