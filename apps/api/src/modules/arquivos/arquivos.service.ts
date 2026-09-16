@@ -70,6 +70,8 @@ export class ArquivosService {
       });
     }
 
+    this.validarAssinaturaBytes(arquivo.buffer, arquivo.mimetype);
+
     const chaveArquivo = this.storage.gerarChave(contexto, arquivo.originalname);
     await this.storage.salvar(chaveArquivo, arquivo.buffer);
 
@@ -131,5 +133,80 @@ export class ArquivosService {
       tamanhoBytes: registro.tamanhoBytes,
       contexto: registro.contexto,
     };
+  }
+
+  private validarAssinaturaBytes(buffer: Buffer, mimeType: string): void {
+    if (buffer.length === 0) {
+      throw new AppException({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'Arquivo vazio.',
+      });
+    }
+
+    // Bloqueia executáveis binários (Windows PE / Linux ELF)
+    if (buffer.length >= 2 && buffer[0] === 0x4d && buffer[1] === 0x5a) {
+      throw new AppException({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'Executáveis binários não são permitidos.',
+      });
+    }
+    if (buffer.length >= 4 && buffer[0] === 0x7f && buffer[1] === 0x45 && buffer[2] === 0x4c && buffer[3] === 0x46) {
+      throw new AppException({
+        status: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'Executáveis binários não são permitidos.',
+      });
+    }
+
+    if (mimeType === 'application/pdf') {
+      const isPdf = buffer.subarray(0, 5).toString('ascii').startsWith('%PDF');
+      if (!isPdf) {
+        throw new AppException({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'Conteúdo do arquivo não corresponde a um PDF válido.',
+        });
+      }
+    } else if (mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+      const isZip = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
+      if (!isZip) {
+        throw new AppException({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'Conteúdo do arquivo não corresponde a uma planilha XLSX válida.',
+        });
+      }
+    } else if (mimeType === 'image/jpeg') {
+      const isJpg = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+      if (!isJpg) {
+        throw new AppException({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'Conteúdo do arquivo não corresponde a uma imagem JPEG válida.',
+        });
+      }
+    } else if (mimeType === 'image/png') {
+      const isPng = buffer.length >= 8 &&
+        buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 &&
+        buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a;
+      if (!isPng) {
+        throw new AppException({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'Conteúdo do arquivo não corresponde a uma imagem PNG válida.',
+        });
+      }
+    } else if (['text/csv', 'application/csv', 'application/x-ofx'].includes(mimeType)) {
+      const amostra = buffer.subarray(0, Math.min(buffer.length, 1024));
+      if (amostra.includes(0x00)) {
+        throw new AppException({
+          status: 400,
+          code: 'VALIDATION_ERROR',
+          message: 'O arquivo contém caracteres binários incompatíveis com arquivo de texto/extrato.',
+        });
+      }
+    }
   }
 }

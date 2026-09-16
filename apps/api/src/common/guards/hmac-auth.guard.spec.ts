@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto';
 import type { ExecutionContext } from '@nestjs/common';
-import { HmacAuthGuard } from './hmac-auth.guard';
+import { HmacAuthGuard, limparCacheAssinaturas } from './hmac-auth.guard';
 
-const SEGREDO = 'segredo-de-teste-do-agente';
+const SEGREDO = 'segredo-de-teste-do-agente-com-mais-de-32-bytes';
 
 function assinar(timestamp: string, corpo: Buffer, segredo = SEGREDO, agentId = 'a1'): string {
   return createHmac('sha256', segredo).update(`${agentId}.${timestamp}.`).update(corpo).digest('hex');
@@ -20,6 +20,7 @@ describe('HmacAuthGuard (Card I1)', () => {
   const OLD_MAP = process.env.AGENT_HMAC_SECRETS_JSON;
 
   beforeEach(() => {
+    limparCacheAssinaturas();
     process.env.AGENT_HMAC_SECRET = SEGREDO;
     delete process.env.AGENT_HMAC_SECRETS_JSON;
   });
@@ -161,5 +162,30 @@ describe('HmacAuthGuard (Card I1)', () => {
       corpo,
     );
     expect(() => new HmacAuthGuard().canActivate(context)).toThrow(/não cadastrado/);
+  });
+
+  it('rejeita repetição de assinatura dentro da janela de tolerância (replay)', () => {
+    const guard = new HmacAuthGuard();
+    const corpo = Buffer.from('{}');
+    const timestamp = new Date().toISOString();
+    const assinatura = assinar(timestamp, corpo);
+    const context = criarContexto(
+      { 'x-agent-id': 'a1', 'x-timestamp': timestamp, 'x-signature': assinatura },
+      corpo,
+    );
+    expect(guard.canActivate(context)).toBe(true);
+    expect(() => guard.canActivate(context)).toThrow(/replay detectado/);
+  });
+
+  it('rejeita AGENT_HMAC_SECRET com menos de 32 bytes', () => {
+    process.env.AGENT_HMAC_SECRET = 'segredo-muito-curto';
+    const guard = new HmacAuthGuard();
+    const corpo = Buffer.from('{}');
+    const timestamp = new Date().toISOString();
+    const context = criarContexto(
+      { 'x-agent-id': 'a1', 'x-timestamp': timestamp, 'x-signature': '0'.repeat(64) },
+      corpo,
+    );
+    expect(() => guard.canActivate(context)).toThrow(/no mínimo 32 bytes/);
   });
 });

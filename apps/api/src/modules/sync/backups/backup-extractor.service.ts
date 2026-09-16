@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { createInflateRaw } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
@@ -179,7 +179,11 @@ export class BackupExtractorService {
       const dataEnd = dataStart + compressedSize;
 
       if (!fileName.endsWith('/') && !fileName.endsWith('\\')) {
-        const filePath = join(destino, fileName);
+        const destinoAbsoluto = resolve(destino);
+        const filePath = resolve(join(destinoAbsoluto, fileName));
+        if (!filePath.startsWith(destinoAbsoluto + sep)) {
+          throw new Error(`Entrada maliciosa detectada no arquivo ZIP (Zip Slip): ${fileName}`);
+        }
         await mkdir(dirname(filePath), { recursive: true });
 
         if (compressionMethod === 0) {

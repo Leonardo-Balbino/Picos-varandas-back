@@ -122,6 +122,31 @@ export class ConciliacaoService {
           });
         }
 
+        // Validação de integridade: nenhum item de período contábil trancado pode ser conciliado
+        for (const extrato of extratos) {
+          const comp = dataCivilEmFusoLoja(extrato.dataTransacao).slice(0, 7);
+          if (await this.fechamentoService.isCompetenciaFechada(comp)) {
+            throw new AppException({
+              status: 422,
+              code: 'PERIOD_LOCKED',
+              message: `O extrato de ${comp} pertence a um mês trancado para auditoria.`,
+              fields: { competencia: comp },
+            });
+          }
+        }
+
+        for (const venda of vendas) {
+          const comp = dataCivilEmFusoLoja(venda.dataHora).slice(0, 7);
+          if (await this.fechamentoService.isCompetenciaFechada(comp)) {
+            throw new AppException({
+              status: 422,
+              code: 'PERIOD_LOCKED',
+              message: `A venda de ${comp} pertence a um mês trancado para auditoria.`,
+              fields: { competencia: comp },
+            });
+          }
+        }
+
         const jaVinculado = [...extratos, ...vendas].find((item) => item.statusConciliacao !== 'pendente');
         if (jaVinculado) {
           throw new AppException({
@@ -179,24 +204,65 @@ export class ConciliacaoService {
    * motor por janela D+N/bandeira via taxas_gateway fica para quando o
    * volume real justificar a complexidade. */
   async matchAutomatico(usuarioId: string): Promise<MatchAutoResponse> {
+    const hoje = new Date();
+    // Limita a busca a uma janela razoável recente (últimos 60 dias) e lote máximo para evitar esgotamento de memória
+    const dataLimite = new Date(hoje.getTime() - 60 * 24 * 60 * 60 * 1000);
+
     const [vendasPendentes, extratosPendentes] = await Promise.all([
-      this.prisma.vendaPdv.findMany({ where: { statusConciliacao: 'pendente' } }),
-      this.prisma.extratoBancario.findMany({ where: { statusConciliacao: 'pendente' } }),
+      this.prisma.vendaPdv.findMany({
+        where: {
+          statusConciliacao: 'pendente',
+          dataHora: { gte: dataLimite },
+        },
+        orderBy: { dataHora: 'asc' },
+        take: 500,
+      }),
+      this.prisma.extratoBancario.findMany({
+        where: {
+          statusConciliacao: 'pendente',
+          dataTransacao: { gte: dataLimite },
+        },
+        orderBy: { dataTransacao: 'asc' },
+        take: 500,
+      }),
     ]);
 
     const extratosDisponiveis = [...extratosPendentes];
     let vinculados = 0;
+    const MAX_DIFERENCA_DIAS = 7;
 
     for (const venda of vendasPendentes) {
+      const compVenda = dataCivilEmFusoLoja(venda.dataHora).slice(0, 7);
+      if (await this.fechamentoService.isCompetenciaFechada(compVenda)) {
+        continue;
+      }
+
       const valorVenda = money(venda.valorLiquido).toNumber();
-      const indice = extratosDisponiveis.findIndex(
-        (extrato) => Math.abs(money(extrato.valor).toNumber() - valorVenda) < TOLERANCIA_MATCH,
-      );
+      const indice = extratosDisponiveis.findIndex((extrato) => {
+        if (Math.abs(money(extrato.valor).toNumber() - valorVenda) >= TOLERANCIA_MATCH) {
+          return false;
+        }
+        // Proximidade temporal: máximo 7 dias de diferença
+        const diffMs = Math.abs(extrato.dataTransacao.getTime() - venda.dataHora.getTime());
+        const diffDias = diffMs / (1000 * 60 * 60 * 24);
+        return diffDias <= MAX_DIFERENCA_DIAS;
+      });
+
       if (indice === -1) continue;
 
       const [extrato] = extratosDisponiveis.splice(indice, 1);
-      await this.vincular({ extratoIds: [extrato.id], vendaPdvIds: [venda.id] }, usuarioId, 'automatica');
-      vinculados++;
+      const compExtrato = dataCivilEmFusoLoja(extrato.dataTransacao).slice(0, 7);
+      if (await this.fechamentoService.isCompetenciaFechada(compExtrato)) {
+        continue;
+      }
+
+      try {
+        await this.vincular({ extratoIds: [extrato.id], vendaPdvIds: [venda.id] }, usuarioId, 'automatica');
+        vinculados++;
+      } catch {
+        // Conflito concorrente ou trava de período: ignora e prossegue com o restante
+        continue;
+      }
     }
 
     return { vinculados };

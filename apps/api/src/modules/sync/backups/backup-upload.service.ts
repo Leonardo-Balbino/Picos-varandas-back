@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import type {
   ConfirmarParteUploadBackupInput,
@@ -42,7 +43,7 @@ export class BackupUploadService {
         data: {
           agenteId,
           chaveIdempotencia: input.idempotencyKey,
-          nomeOrigem: input.source.fileName,
+          nomeOrigem: basename(input.source.fileName),
           tamanhoOrigem: BigInt(input.source.size),
           sha256Origem: input.source.sha256,
           mtimeOrigemNs: input.source.modifiedAtNs,

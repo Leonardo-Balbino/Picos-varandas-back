@@ -86,8 +86,18 @@ export class FinanceiroService {
 
     // dataVencimento pode não vir no corpo (edição de outro campo) — nesse
     // caso o @CompetenciaFrom do controller não tem o que checar; o mês do
-    // vencimento ATUAL do registro precisa ser conferido aqui manualmente
-    // (mesmo limite documentado em competencia-from.decorator.ts).
+    // vencimento ATUAL do registro precisa ser conferido aqui manualmente.
+    // Também garante que não se edite conta cujo vencimento original já está em mês trancado.
+    const competenciaAtual = this.competenciaDeDataCivil(atual.dataVencimento);
+    if (await this.fechamentoService.isCompetenciaFechada(competenciaAtual)) {
+      throw new AppException({
+        status: 422,
+        code: 'PERIOD_LOCKED',
+        message: 'A data de vencimento atual desta conta pertence a um mês trancado para auditoria.',
+        fields: { competencia: competenciaAtual },
+      });
+    }
+
     const novoVencimento = input.dataVencimento ? new Date(input.dataVencimento) : atual.dataVencimento;
     const competencia = this.competenciaDeDataCivil(novoVencimento);
     if (await this.fechamentoService.isCompetenciaFechada(competencia)) {
@@ -127,6 +137,16 @@ export class FinanceiroService {
         status: 409,
         code: 'CONFLICT',
         message: 'Esta conta já foi paga ou cancelada.',
+      });
+    }
+
+    const competenciaVencimento = this.competenciaDeDataCivil(atual.dataVencimento);
+    if (await this.fechamentoService.isCompetenciaFechada(competenciaVencimento)) {
+      throw new AppException({
+        status: 422,
+        code: 'PERIOD_LOCKED',
+        message: 'A data de vencimento desta conta pertence a um mês trancado para auditoria.',
+        fields: { competencia: competenciaVencimento },
       });
     }
 

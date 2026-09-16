@@ -1,5 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import { json, urlencoded } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import type { RequestWithTraceId } from './common/types/request-with-trace';
@@ -37,7 +38,18 @@ export function configureApp(app: INestApplication): void {
   // cliente a partir de X-Forwarded-For, que é o que o
   // ThrottlerGuard usa por padrão (req.ip). `1` confia em exatamente um
   // salto de proxy — o do próprio Railway na frente da aplicação.
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  const expressInstance = app.getHttpAdapter().getInstance();
+  expressInstance.set('trust proxy', 1);
+  expressInstance.disable('x-powered-by');
+
+  // Headers de segurança HTTP essenciais
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.setHeader('X-XSS-Protection', '0');
+    next();
+  });
 
   // Base URL: /api/v1 (seção 3.9).
   app.setGlobalPrefix('api/v1');

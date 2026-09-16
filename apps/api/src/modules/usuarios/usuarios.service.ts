@@ -83,10 +83,12 @@ export class UsuariosService {
       });
     }
 
-    // Transição para inativo invalida sessões em circulação imediatamente —
+    // Transição para inativo ou alteração de perfil invalida sessões em circulação imediatamente —
     // mesmo mecanismo de `tokenVersion` usado em troca de senha (Card B1) e
     // documentado no comentário de `precisaTrocarSenha` em schema.prisma.
     const vaiDesativar = input.ativo === false && atual.ativo;
+    const mudouPerfil = input.perfil !== undefined && input.perfil !== atual.perfil;
+    const deveInvalidarSessao = vaiDesativar || mudouPerfil;
 
     const atualizado = await this.prisma.usuario.update({
       where: { id },
@@ -94,7 +96,7 @@ export class UsuariosService {
         nome: input.nome,
         perfil: input.perfil,
         ativo: input.ativo,
-        ...(vaiDesativar ? { tokenVersion: { increment: 1 } } : {}),
+        ...(deveInvalidarSessao ? { tokenVersion: { increment: 1 } } : {}),
       },
     });
 

@@ -5,6 +5,13 @@ import type { RequestWithTraceId } from '../types/request-with-trace';
 
 const JANELA_ANTI_REPLAY_MS = 5 * 60 * 1000;
 
+// Cache em memória de assinaturas processadas com seus timestamps para proteção anti-replay
+const assinaturasVistas = new Map<string, number>();
+
+export function limparCacheAssinaturas(): void {
+  assinaturasVistas.clear();
+}
+
 /**
  * Autenticação do agente local (Card I1) — HMAC-SHA256, não chave estática.
  * Aplicado explicitamente (`@UseGuards(HmacAuthGuard)`) nos controllers de
@@ -72,6 +79,19 @@ export class HmacAuthGuard implements CanActivate {
       throw this.naoAutorizado('Assinatura inválida.');
     }
 
+    const agora = Date.now();
+    for (const [sig, ts] of assinaturasVistas.entries()) {
+      if (agora - ts > JANELA_ANTI_REPLAY_MS) {
+        assinaturasVistas.delete(sig);
+      }
+    }
+
+    if (assinaturasVistas.has(assinatura)) {
+      this.logger.warn(`[${request.traceId}] Tentativa de replay detectada para agente '${agentId}'.`);
+      throw this.naoAutorizado('Assinatura já utilizada (replay detectado).');
+    }
+    assinaturasVistas.set(assinatura, agora);
+
     request.agentId = agentId;
     return true;
   }
@@ -116,7 +136,18 @@ export class HmacAuthGuard implements CanActivate {
       }
     }
     // Compatibilidade durante a migração de uma única instalação.
-    return process.env.AGENT_HMAC_SECRET;
+    const fallback = process.env.AGENT_HMAC_SECRET;
+    if (fallback) {
+      if (Buffer.byteLength(fallback, 'utf8') < 32) {
+        throw new AppException({
+          status: 500,
+          code: 'INTERNAL_ERROR',
+          message: 'AGENT_HMAC_SECRET deve ter no mínimo 32 bytes de entropia.',
+        });
+      }
+      return fallback;
+    }
+    return undefined;
   }
 
   private naoAutorizado(message: string): AppException {

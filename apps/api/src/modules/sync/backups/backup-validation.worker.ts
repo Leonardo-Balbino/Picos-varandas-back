@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
@@ -51,7 +51,7 @@ export class BackupValidationWorker {
     const upload = await this.prisma.uploadBackupPdv.findUniqueOrThrow({ where: { id: uploadId } });
     const directory = join(tmpdir(), `pva-${randomUUID()}`);
     const envelopePath = join(directory, 'backup.pva');
-    const decryptedBackupPath = join(directory, upload.nomeOrigem);
+    const decryptedBackupPath = join(directory, basename(upload.nomeOrigem));
     try {
       await mkdir(directory, { recursive: false, mode: 0o700 });
       const source = await this.bucket.abrir(upload.chaveObjeto);
