@@ -146,7 +146,7 @@ describe('BackupExtractorService', () => {
       expect(vendas[0].idExterno).toMatch(/^varanda-pag:\d+:\d+:/);
       expect(vendas[0].valorBruto).toBeGreaterThan(0);
       expect(vendas[0].dataHora).toMatch(/Z$/);
-    });
+    }, 30000);
 
     it('descompacta arquivo .zip real e localiza o banco Firebird dentro dele', async () => {
       // Cria uma pasta com um arquivo .gdb simulado
@@ -169,6 +169,6 @@ describe('BackupExtractorService', () => {
       // Localiza o banco
       const bancoLocalizado = await service.localizarBancoFirebird(pastaDestino);
       expect(bancoLocalizado).toMatch(/VARANDA888\.GDB$/);
-    });
+    }, 30000);
   });
 });

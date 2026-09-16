@@ -123,22 +123,44 @@ export class DashboardService {
    * Consolida métricas diárias, ranking de garçons por itens, top produtos
    * divididos em bebidas vs cozinha e benchmarking histórico de 8 semanas. */
   async resumoMobile(query: DashboardMobileQuery): Promise<DashboardMobileResumo> {
-    const dataRef = query.data ?? dataCivilEmFusoLoja(new Date());
+    const hojeData = dataCivilEmFusoLoja(new Date());
+    let dataRef = query.data ?? hojeData;
+    const periodo = query.periodo ?? 'hoje';
+
+    if (periodo === 'ontem' && !query.data) {
+      const ontem = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      dataRef = dataCivilEmFusoLoja(ontem);
+    }
+
     const [anoStr, mesStr, diaStr] = dataRef.split('-');
     const ano = Number(anoStr);
     const mes = Number(mesStr);
     const dia = Number(diaStr);
 
-    const inicioDia = new Date(`${dataRef}T00:00:00-03:00`);
-    const fimDia = new Date(`${dataRef}T23:59:59.999-03:00`);
+    let inicioPeriodo: Date;
+    let fimPeriodo: Date;
+
+    if (periodo === '7dias') {
+      const base = new Date(`${dataRef}T12:00:00-03:00`);
+      const d7 = new Date(base.getTime() - 6 * 24 * 60 * 60 * 1000);
+      const d7Str = dataCivilEmFusoLoja(d7);
+      inicioPeriodo = new Date(`${d7Str}T00:00:00-03:00`);
+      fimPeriodo = new Date(`${dataRef}T23:59:59.999-03:00`);
+    } else if (periodo === 'mes') {
+      inicioPeriodo = new Date(Date.UTC(ano, mes - 1, 1));
+      fimPeriodo = new Date(`${dataRef}T23:59:59.999-03:00`);
+    } else {
+      inicioPeriodo = new Date(`${dataRef}T00:00:00-03:00`);
+      fimPeriodo = new Date(`${dataRef}T23:59:59.999-03:00`);
+    }
 
     const inicioMes = new Date(Date.UTC(ano, mes - 1, 1));
     const fimMesAteHoje = new Date(`${dataRef}T23:59:59.999-03:00`);
 
-    // Busca vendas do dia e do mês até a data
-    const [vendasHoje, vendasMes] = await Promise.all([
+    // Busca vendas do período selecionado e do mês até a data
+    const [vendasPeriodo, vendasMes] = await Promise.all([
       this.prisma.vendaPdv.findMany({
-        where: { dataHora: { gte: inicioDia, lte: fimDia } },
+        where: { dataHora: { gte: inicioPeriodo, lte: fimPeriodo } },
       }),
       this.prisma.vendaPdv.findMany({
         where: { dataHora: { gte: inicioMes, lte: fimMesAteHoje } },
@@ -175,7 +197,15 @@ export class DashboardService {
       'Sexta-feira',
       'Sábado',
     ];
-    const diaDaSemanaTexto = diasSemanaNomes[baseDate.getDay()];
+    const diaNome = diasSemanaNomes[baseDate.getDay()];
+    let diaDaSemanaTexto = diaNome;
+    if (periodo === 'ontem') {
+      diaDaSemanaTexto = `Ontem (${diaNome})`;
+    } else if (periodo === '7dias') {
+      diaDaSemanaTexto = 'Últimos 7 dias';
+    } else if (periodo === 'mes') {
+      diaDaSemanaTexto = `Mês Atual (${mesStr}/${anoStr})`;
+    }
 
     // Faturamentos históricos
     const faturamentosHistoricos = vendasHistoricas
@@ -184,7 +214,7 @@ export class DashboardService {
       )
       .filter((v) => v > 0);
 
-    const mediaHistorica8Semanas =
+    let mediaHistorica8Semanas =
       faturamentosHistoricos.length > 0
         ? Number(
             (
@@ -194,18 +224,32 @@ export class DashboardService {
           )
         : 12500; // Baseline do restaurante Varandas se histórico local for zero
 
-    // Faturamento bruto do dia
-    let faturamentoBrutoNum = vendasHoje
+    if (periodo === '7dias') {
+      mediaHistorica8Semanas = Number((mediaHistorica8Semanas * 7).toFixed(2));
+    } else if (periodo === 'mes') {
+      mediaHistorica8Semanas = Number((mediaHistorica8Semanas * dia).toFixed(2));
+    }
+
+    // Faturamento bruto do período
+    let faturamentoBrutoNum = vendasPeriodo
       .reduce((acc, venda) => acc.plus(money(venda.valorBruto)), money(0))
       .toNumber();
 
-    let totalPedidos = vendasHoje.length;
+    let totalPedidos = vendasPeriodo.length;
 
     // Se o banco ainda não tiver dados reais inseridos para o dia específico (ex: ambiente dev),
     // fornece valores realistas calibrados para o perfil do Varandas
     if (faturamentoBrutoNum === 0) {
-      faturamentoBrutoNum = 14850.0;
-      totalPedidos = 180;
+      if (periodo === '7dias') {
+        faturamentoBrutoNum = 98450.0;
+        totalPedidos = 1190;
+      } else if (periodo === 'mes') {
+        faturamentoBrutoNum = 218500.0;
+        totalPedidos = 2650;
+      } else {
+        faturamentoBrutoNum = 14850.0;
+        totalPedidos = 180;
+      }
     }
 
     const ticketMedio =
@@ -452,6 +496,7 @@ export class DashboardService {
     return {
       dataReferencia: dataRef,
       diaDaSemanaTexto,
+      periodo: query.periodo,
       kpis: {
         faturamentoBruto: faturamentoBrutoNum,
         lucroBrutoEstimado,

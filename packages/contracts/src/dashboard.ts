@@ -40,8 +40,12 @@ export type DashboardResumo = z.infer<typeof dashboardResumoSchema>;
 // Dashboard Executivo Mobile — Restaurante Varandas
 // =============================================================================
 
+export const periodoMobileSchema = z.enum(['hoje', 'ontem', '7dias', 'mes']);
+export type PeriodoMobile = z.infer<typeof periodoMobileSchema>;
+
 export const dashboardMobileQuerySchema = z.object({
   data: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  periodo: periodoMobileSchema.optional(),
 });
 export type DashboardMobileQuery = z.infer<typeof dashboardMobileQuerySchema>;
 
@@ -89,6 +93,7 @@ export type BenchmarkingDia = z.infer<typeof benchmarkingDiaSchema>;
 export const dashboardMobileResumoSchema = z.object({
   dataReferencia: z.string(),
   diaDaSemanaTexto: z.string(),
+  periodo: periodoMobileSchema.optional(),
   kpis: z.object({
     faturamentoBruto: z.number().nonnegative(),
     lucroBrutoEstimado: z.number(),
