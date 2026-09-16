@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import type {
   ConfirmarParteUploadBackupInput,
   ConcluirUploadBackupInput,
@@ -10,14 +10,18 @@ import { Prisma } from '../../../generated/prisma/client';
 import { AppException } from '../../../common/exceptions/app.exception';
 import { PrismaService } from '../../../infra/prisma/prisma.service';
 import { BackupBucketService } from '../../../infra/storage/backup-bucket.service';
+import { BackupValidationWorker } from './backup-validation.worker';
 
 const MIN_PART_SIZE = 5 * 1024 * 1024;
 
 @Injectable()
 export class BackupUploadService {
+  private readonly logger = new Logger(BackupUploadService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly bucket: BackupBucketService,
+    @Optional() private readonly worker?: BackupValidationWorker,
   ) {}
 
   async iniciar(agenteId: string, input: IniciarUploadBackupInput) {
@@ -186,11 +190,20 @@ export class BackupUploadService {
       where: { id: uploadId },
       data: { status: 'recebido', recebidoEm: new Date(), multipartUploadId: null },
     });
+    if (this.worker && process.env.BACKUP_PRIVATE_KEY_BASE64) {
+      void this.worker.processarPendentes().catch((erro: unknown) => {
+        const detalhe = erro instanceof Error ? erro.message : String(erro);
+        this.logger.error(`Erro ao disparar worker após upload ${uploadId}: ${detalhe}`);
+      });
+    }
     return { status: 'verifying' as const };
   }
 
   async status(agenteId: string, uploadId: string) {
     const upload = await this.obter(uploadId, agenteId);
+    if (upload.status === 'recebido' && this.worker && process.env.BACKUP_PRIVATE_KEY_BASE64) {
+      void this.worker.processarPendentes().catch(() => undefined);
+    }
     return this.respostaStatus(upload.status, upload.erroDetalhe);
   }
 
