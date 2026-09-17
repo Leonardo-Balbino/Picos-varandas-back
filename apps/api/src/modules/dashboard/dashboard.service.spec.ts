@@ -2,11 +2,11 @@ import { DashboardService } from './dashboard.service';
 import type { PrismaService } from '../../infra/prisma/prisma.service';
 import type { FinanceiroService } from '../financeiro/financeiro.service';
 
-function criarPrismaMock() {
+function criarPrismaMock(vendas: Array<{ valorBruto: number; dataHora: Date }> = []) {
   return {
     vendaPdv: {
-      findMany: jest.fn().mockResolvedValue([]),
-      count: jest.fn().mockResolvedValue(0),
+      findMany: jest.fn().mockImplementation(() => Promise.resolve(vendas)),
+      count: jest.fn().mockResolvedValue(vendas.length),
     },
     contaPagar: {
       aggregate: jest.fn().mockResolvedValue({ _sum: { valor: 0 } }),
@@ -29,9 +29,9 @@ function criarFinanceiroMock() {
   } as unknown as FinanceiroService;
 }
 
-describe('DashboardService (Dashboard Executivo Mobile + Desktop)', () => {
-  it('retorna o resumo mobile com estrutura completa de KPIs, benchmarking e rankings', async () => {
-    const prisma = criarPrismaMock();
+describe('DashboardService (Dashboard Executivo 100% Real)', () => {
+  it('quando o banco não tem vendas no dia, retorna faturamento 0 e rankings vazios sem inventar dados', async () => {
+    const prisma = criarPrismaMock([]);
     const financeiro = criarFinanceiroMock();
     const service = new DashboardService(prisma, financeiro);
 
@@ -39,19 +39,33 @@ describe('DashboardService (Dashboard Executivo Mobile + Desktop)', () => {
 
     expect(resultado.dataReferencia).toBe('2026-09-15');
     expect(resultado.periodo).toBe('hoje');
-    expect(resultado.kpis.faturamentoBruto).toBeGreaterThan(0);
-    expect(resultado.kpis.lucroBrutoEstimado).toBeGreaterThan(0);
-    expect(resultado.kpis.ticketMedio).toBeGreaterThan(0);
-    expect(resultado.kpis.benchmarking.mediaHistorica8Semanas).toBeGreaterThan(0);
-    expect(resultado.kpis.benchmarking.metaDoDia).toBeGreaterThan(0);
-    expect(resultado.rankingGarcons.length).toBeGreaterThanOrEqual(5);
-    expect(resultado.rankingProdutos.bebidas.length).toBeGreaterThanOrEqual(5);
-    expect(resultado.rankingProdutos.cozinha.length).toBeGreaterThanOrEqual(5);
-    expect(resultado.rankingProdutos.todos.length).toBeGreaterThanOrEqual(10);
+    expect(resultado.kpis.faturamentoBruto).toBe(0);
+    expect(resultado.kpis.totalPedidos).toBe(0);
+    expect(resultado.kpis.ticketMedio).toBe(0);
+    expect(resultado.kpis.lucroBrutoEstimado).toBe(0);
+    expect(resultado.rankingGarcons).toEqual([]);
+    expect(resultado.rankingProdutos.todos).toEqual([]);
+  });
+
+  it('quando o banco possui vendas reais, calcula faturamento bruto, ticket médio e margens reais', async () => {
+    const vendasReais = [
+      { valorBruto: 150.0, dataHora: new Date('2026-09-15T12:00:00-03:00') },
+      { valorBruto: 250.0, dataHora: new Date('2026-09-15T13:30:00-03:00') },
+    ];
+    const prisma = criarPrismaMock(vendasReais);
+    const financeiro = criarFinanceiroMock();
+    const service = new DashboardService(prisma, financeiro);
+
+    const resultado = await service.resumoMobile({ data: '2026-09-15', periodo: 'hoje' });
+
+    expect(resultado.kpis.faturamentoBruto).toBe(400.0);
+    expect(resultado.kpis.totalPedidos).toBe(2);
+    expect(resultado.kpis.ticketMedio).toBe(200.0);
+    expect(resultado.kpis.lucroBrutoEstimado).toBe(250.0); // 62.5% de 400
   });
 
   it('suporta períodos ontens, 7dias e mes', async () => {
-    const prisma = criarPrismaMock();
+    const prisma = criarPrismaMock([]);
     const financeiro = criarFinanceiroMock();
     const service = new DashboardService(prisma, financeiro);
 
@@ -65,7 +79,7 @@ describe('DashboardService (Dashboard Executivo Mobile + Desktop)', () => {
   });
 
   it('retorna o resumo contábil desktop para o mês solicitado', async () => {
-    const prisma = criarPrismaMock();
+    const prisma = criarPrismaMock([]);
     const financeiro = criarFinanceiroMock();
     const service = new DashboardService(prisma, financeiro);
 

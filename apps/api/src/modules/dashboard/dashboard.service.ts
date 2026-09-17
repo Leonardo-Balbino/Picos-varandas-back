@@ -222,7 +222,7 @@ export class DashboardService {
               faturamentosHistoricos.length
             ).toFixed(2),
           )
-        : 12500; // Baseline do restaurante Varandas se histórico local for zero
+        : 0;
 
     if (periodo === '7dias') {
       mediaHistorica8Semanas = Number((mediaHistorica8Semanas * 7).toFixed(2));
@@ -230,38 +230,23 @@ export class DashboardService {
       mediaHistorica8Semanas = Number((mediaHistorica8Semanas * dia).toFixed(2));
     }
 
-    // Faturamento bruto do período
-    let faturamentoBrutoNum = vendasPeriodo
+    // Faturamento bruto do período — 100% REAL do banco de dados
+    const faturamentoBrutoNum = vendasPeriodo
       .reduce((acc, venda) => acc.plus(money(venda.valorBruto)), money(0))
       .toNumber();
 
-    let totalPedidos = vendasPeriodo.length;
-
-    // Se o banco ainda não tiver dados reais inseridos para o dia específico (ex: ambiente dev),
-    // fornece valores realistas calibrados para o perfil do Varandas
-    if (faturamentoBrutoNum === 0) {
-      if (periodo === '7dias') {
-        faturamentoBrutoNum = 98450.0;
-        totalPedidos = 1190;
-      } else if (periodo === 'mes') {
-        faturamentoBrutoNum = 218500.0;
-        totalPedidos = 2650;
-      } else {
-        faturamentoBrutoNum = 14850.0;
-        totalPedidos = 180;
-      }
-    }
+    const totalPedidos = vendasPeriodo.length;
 
     const ticketMedio =
       totalPedidos > 0 ? Number((faturamentoBrutoNum / totalPedidos).toFixed(2)) : 0;
 
     // Lucro bruto estimado (Varandas opera com margem bruta média de ~60% a 65%)
-    const margemBrutaPercentual = 62.5;
+    const margemBrutaPercentual = faturamentoBrutoNum > 0 ? 62.5 : 0;
     const lucroBrutoEstimado = Number(
       ((faturamentoBrutoNum * margemBrutaPercentual) / 100).toFixed(2),
     );
 
-    // Comparativo percentual vs média
+    // Comparativo percentual vs média histórica
     const diferencaPercentual =
       mediaHistorica8Semanas > 0
         ? Number(
@@ -280,11 +265,11 @@ export class DashboardService {
           ? 'abaixo'
           : 'estavel';
 
-    const metaDoDia = Number((mediaHistorica8Semanas * 1.1).toFixed(2)); // Meta de +10% sobre média
+    const metaDoDia = mediaHistorica8Semanas > 0 ? Number((mediaHistorica8Semanas * 1.1).toFixed(2)) : 0;
     const percentualAtingidoMeta =
       metaDoDia > 0 ? Number(((faturamentoBrutoNum / metaDoDia) * 100).toFixed(1)) : 0;
 
-    // 2. Evolução diária no mês
+    // 2. Evolução diária no mês — 100% REAL do banco de dados
     const faturamentoPorDiaMes = new Map<number, { dia: number; faturamento: number; pedidos: number; data: string }>();
     for (let d = 1; d <= dia; d++) {
       const dStr = `${anoStr}-${mesStr}-${String(d).padStart(2, '0')}`;
@@ -301,197 +286,22 @@ export class DashboardService {
       }
     }
 
-    // Se mês estiver sem vendas no banco, provê série consistente para visualização
-    const evolucaoMes = Array.from(faturamentoPorDiaMes.values()).map((item) => {
-      if (item.faturamento === 0) {
-        const fator = 0.7 + Math.sin(item.dia * 1.5) * 0.3;
-        const simFaturamento = Number((faturamentoBrutoNum * fator).toFixed(2));
-        const simPedidos = Math.round(totalPedidos * fator);
-        return {
-          dia: item.dia,
-          data: item.data,
-          faturamento: item.dia === dia ? faturamentoBrutoNum : simFaturamento,
-          pedidos: item.dia === dia ? totalPedidos : simPedidos,
-        };
-      }
-      return {
-        dia: item.dia,
-        data: item.data,
-        faturamento: item.faturamento,
-        pedidos: item.pedidos,
-      };
-    });
+    const evolucaoMes = Array.from(faturamentoPorDiaMes.values()).map((item) => ({
+      dia: item.dia,
+      data: item.data,
+      faturamento: item.faturamento,
+      pedidos: item.pedidos,
+    }));
 
-    // 3. Ranking de Garçons (Regra dos Itens)
-    // Coleta itens de cada venda ou utiliza mapeamento calibrado dos garçons do Varandas
-    const rankingGarcons: GarcomRanking[] = [
-      {
-        posicao: 1,
-        idGarcom: 101,
-        nomeGarcom: 'Carlos Silva',
-        totalItens: Math.round(totalPedidos * 0.32),
-        totalFaturado: Number((faturamentoBrutoNum * 0.28).toFixed(2)),
-        comissaoEstimada: Number((faturamentoBrutoNum * 0.28 * 0.1).toFixed(2)),
-        percentualDoTotal: 28.0,
-      },
-      {
-        posicao: 2,
-        idGarcom: 104,
-        nomeGarcom: 'Juliana Santos',
-        totalItens: Math.round(totalPedidos * 0.26),
-        totalFaturado: Number((faturamentoBrutoNum * 0.24).toFixed(2)),
-        comissaoEstimada: Number((faturamentoBrutoNum * 0.24 * 0.1).toFixed(2)),
-        percentualDoTotal: 24.0,
-      },
-      {
-        posicao: 3,
-        idGarcom: 108,
-        nomeGarcom: 'Marcos Oliveira',
-        totalItens: Math.round(totalPedidos * 0.22),
-        totalFaturado: Number((faturamentoBrutoNum * 0.21).toFixed(2)),
-        comissaoEstimada: Number((faturamentoBrutoNum * 0.21 * 0.1).toFixed(2)),
-        percentualDoTotal: 21.0,
-      },
-      {
-        posicao: 4,
-        idGarcom: 112,
-        nomeGarcom: 'Renata Souza',
-        totalItens: Math.round(totalPedidos * 0.16),
-        totalFaturado: Number((faturamentoBrutoNum * 0.16).toFixed(2)),
-        comissaoEstimada: Number((faturamentoBrutoNum * 0.16 * 0.1).toFixed(2)),
-        percentualDoTotal: 16.0,
-      },
-      {
-        posicao: 5,
-        idGarcom: 115,
-        nomeGarcom: 'Felipe Costa',
-        totalItens: Math.round(totalPedidos * 0.11),
-        totalFaturado: Number((faturamentoBrutoNum * 0.11).toFixed(2)),
-        comissaoEstimada: Number((faturamentoBrutoNum * 0.11 * 0.1).toFixed(2)),
-        percentualDoTotal: 11.0,
-      },
-    ];
+    // 3. Ranking de Garçons — removido por enquanto a pedido do cliente
+    const rankingGarcons: GarcomRanking[] = [];
 
-    // 4. Ranking de Produtos Líderes com divisão Bebidas vs Cozinha
-    const bebidas: ProdutoRanking[] = [
-      {
-        posicao: 1,
-        idProduto: 201,
-        nome: 'Chopp Brahma 350ml',
-        categoria: 'Chopes & Cervejas',
-        tipoCategoria: 'BEBIDA',
-        quantidade: 142,
-        receitaTotal: 1704.0,
-        custoTotal: 596.4,
-        margemLucroPercentual: 65.0,
-      },
-      {
-        posicao: 2,
-        idProduto: 204,
-        nome: 'Caipirinha Especial de Cachaça',
-        categoria: 'Drinks & Coquetéis',
-        tipoCategoria: 'BEBIDA',
-        quantidade: 48,
-        receitaTotal: 1152.0,
-        custoTotal: 288.0,
-        margemLucroPercentual: 75.0,
-      },
-      {
-        posicao: 3,
-        idProduto: 210,
-        nome: 'Cerveja Heineken 600ml',
-        categoria: 'Chopes & Cervejas',
-        tipoCategoria: 'BEBIDA',
-        quantidade: 55,
-        receitaTotal: 990.0,
-        custoTotal: 445.5,
-        margemLucroPercentual: 55.0,
-      },
-      {
-        posicao: 4,
-        idProduto: 215,
-        nome: 'Refrigerante Lata 350ml',
-        categoria: 'Bebidas não alcoólicas',
-        tipoCategoria: 'BEBIDA',
-        quantidade: 85,
-        receitaTotal: 680.0,
-        custoTotal: 238.0,
-        margemLucroPercentual: 65.0,
-      },
-      {
-        posicao: 5,
-        idProduto: 220,
-        nome: 'Suco Natural Laranja 500ml',
-        categoria: 'Sucos & Águas',
-        tipoCategoria: 'BEBIDA',
-        quantidade: 40,
-        receitaTotal: 480.0,
-        custoTotal: 144.0,
-        margemLucroPercentual: 70.0,
-      },
-    ];
-
-    const cozinha: ProdutoRanking[] = [
-      {
-        posicao: 1,
-        idProduto: 101,
-        nome: 'Picanha na Brasa Varandas (2 Pessoas)',
-        categoria: 'Grelhados & Carnes',
-        tipoCategoria: 'COZINHA',
-        quantidade: 34,
-        receitaTotal: 4046.0,
-        custoTotal: 1416.1,
-        margemLucroPercentual: 65.0,
-      },
-      {
-        posicao: 2,
-        idProduto: 105,
-        nome: 'Filé à Parmegiana com Arroz e Fritas',
-        categoria: 'Pratos Principais',
-        tipoCategoria: 'COZINHA',
-        quantidade: 28,
-        receitaTotal: 2212.0,
-        custoTotal: 774.2,
-        margemLucroPercentual: 65.0,
-      },
-      {
-        posicao: 3,
-        idProduto: 110,
-        nome: 'Isca de Peixe com Molho Tártaro',
-        categoria: 'Petiscos & Entradas',
-        tipoCategoria: 'COZINHA',
-        quantidade: 31,
-        receitaTotal: 1798.0,
-        custoTotal: 539.4,
-        margemLucroPercentual: 70.0,
-      },
-      {
-        posicao: 4,
-        idProduto: 115,
-        nome: 'Costela ao Barbecue com Fritas',
-        categoria: 'Grelhados & Carnes',
-        tipoCategoria: 'COZINHA',
-        quantidade: 19,
-        receitaTotal: 1615.0,
-        custoTotal: 565.25,
-        margemLucroPercentual: 65.0,
-      },
-      {
-        posicao: 5,
-        idProduto: 125,
-        nome: 'Pudim de Leite Condensado Caseiro',
-        categoria: 'Sobremesas',
-        tipoCategoria: 'COZINHA',
-        quantidade: 36,
-        receitaTotal: 576.0,
-        custoTotal: 115.2,
-        margemLucroPercentual: 80.0,
-      },
-    ];
-
-    const todos: ProdutoRanking[] = [...cozinha, ...bebidas]
-      .sort((a, b) => b.receitaTotal - a.receitaTotal)
-      .map((item, idx) => ({ ...item, posicao: idx + 1 }));
+    // 4. Ranking de Produtos — vazio até integração direta de NOTAS_ITENS no banco
+    const rankingProdutos = {
+      todos: [] as ProdutoRanking[],
+      bebidas: [] as ProdutoRanking[],
+      cozinha: [] as ProdutoRanking[],
+    };
 
     return {
       dataReferencia: dataRef,
@@ -513,11 +323,7 @@ export class DashboardService {
       },
       evolucaoMes,
       rankingGarcons,
-      rankingProdutos: {
-        todos,
-        bebidas: bebidas.map((b, idx) => ({ ...b, posicao: idx + 1 })),
-        cozinha: cozinha.map((c, idx) => ({ ...c, posicao: idx + 1 })),
-      },
+      rankingProdutos,
       atualizadoEm: new Date().toISOString(),
     };
   }
