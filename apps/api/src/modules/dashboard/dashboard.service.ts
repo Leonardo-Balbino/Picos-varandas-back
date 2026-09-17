@@ -137,6 +137,12 @@ export class DashboardService {
     const mes = Number(mesStr);
     const dia = Number(diaStr);
 
+    const ultimoDiaDoMes = new Date(ano, mes, 0).getDate();
+    const hojeAnoMes = hojeData.slice(0, 7);
+    const refAnoMes = `${anoStr}-${mesStr}`;
+    const ehMesAtual = refAnoMes === hojeAnoMes;
+
+    let diaLimiteGrafico = dia;
     let inicioPeriodo: Date;
     let fimPeriodo: Date;
 
@@ -148,14 +154,21 @@ export class DashboardService {
       fimPeriodo = new Date(`${dataRef}T23:59:59.999-03:00`);
     } else if (periodo === 'mes') {
       inicioPeriodo = new Date(Date.UTC(ano, mes - 1, 1));
-      fimPeriodo = new Date(`${dataRef}T23:59:59.999-03:00`);
+      if (ehMesAtual) {
+        fimPeriodo = new Date(`${hojeData}T23:59:59.999-03:00`);
+        diaLimiteGrafico = Number(hojeData.slice(8, 10));
+      } else {
+        const fimStr = `${anoStr}-${mesStr}-${String(ultimoDiaDoMes).padStart(2, '0')}`;
+        fimPeriodo = new Date(`${fimStr}T23:59:59.999-03:00`);
+        diaLimiteGrafico = ultimoDiaDoMes;
+      }
     } else {
       inicioPeriodo = new Date(`${dataRef}T00:00:00-03:00`);
       fimPeriodo = new Date(`${dataRef}T23:59:59.999-03:00`);
     }
 
     const inicioMes = new Date(Date.UTC(ano, mes - 1, 1));
-    const fimMesAteHoje = new Date(`${dataRef}T23:59:59.999-03:00`);
+    const fimMesAteHoje = periodo === 'mes' ? fimPeriodo : new Date(`${dataRef}T23:59:59.999-03:00`);
 
     // Busca vendas do período selecionado e do mês até a data
     const [vendasPeriodo, vendasMes] = await Promise.all([
@@ -204,7 +217,7 @@ export class DashboardService {
     } else if (periodo === '7dias') {
       diaDaSemanaTexto = 'Últimos 7 dias';
     } else if (periodo === 'mes') {
-      diaDaSemanaTexto = `Mês Atual (${mesStr}/${anoStr})`;
+      diaDaSemanaTexto = ehMesAtual ? `Mês Atual (${mesStr}/${anoStr})` : `Mês (${mesStr}/${anoStr})`;
     }
 
     // Faturamentos históricos
@@ -227,7 +240,7 @@ export class DashboardService {
     if (periodo === '7dias') {
       mediaHistorica8Semanas = Number((mediaHistorica8Semanas * 7).toFixed(2));
     } else if (periodo === 'mes') {
-      mediaHistorica8Semanas = Number((mediaHistorica8Semanas * dia).toFixed(2));
+      mediaHistorica8Semanas = Number((mediaHistorica8Semanas * diaLimiteGrafico).toFixed(2));
     }
 
     // Faturamento bruto do período — 100% REAL do banco de dados
@@ -271,7 +284,7 @@ export class DashboardService {
 
     // 2. Evolução diária no mês — 100% REAL do banco de dados
     const faturamentoPorDiaMes = new Map<number, { dia: number; faturamento: number; pedidos: number; data: string }>();
-    for (let d = 1; d <= dia; d++) {
+    for (let d = 1; d <= diaLimiteGrafico; d++) {
       const dStr = `${anoStr}-${mesStr}-${String(d).padStart(2, '0')}`;
       faturamentoPorDiaMes.set(d, { dia: d, data: dStr, faturamento: 0, pedidos: 0 });
     }
